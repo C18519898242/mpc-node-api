@@ -40,6 +40,18 @@ func TestECDSAPublicKeyRejectsHardenedPath(t *testing.T) {
 	}
 }
 
+func TestECDSAPresignRejectsInvalidCount(t *testing.T) {
+	n := newNode(config.Config{})
+	for _, count := range []string{"0", "9", "-1", "1.5"} {
+		request := httptest.NewRequest(http.MethodPost, "/ecdsa/keys/test/"+count+"/presiggen", nil)
+		response := httptest.NewRecorder()
+		n.restHandler().ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("count %q: status = %d, want 400", count, response.Code)
+		}
+	}
+}
+
 func TestECDSASignRejectsShortDigest(t *testing.T) {
 	n := newNode(config.Config{PartyID: "1", Peers: map[party.ID]string{"2": "", "3": ""}})
 	routingID := mpcRoutingID("test_sign")

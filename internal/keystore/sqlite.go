@@ -83,6 +83,9 @@ func initSQLite(db *sql.DB, partyID string) error {
 	if err := migrateKeyShares(tx); err != nil {
 		return err
 	}
+	if err := createPresignTables(tx); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

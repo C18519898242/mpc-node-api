@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ func (n *node) peerHandler() http.Handler {
 
 func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("sessionId")
+	batchID, slot, presign := splitPresignRoute(id)
 	var message protocol.Message
 	if !validPeerSessionID(id) || decodeJSON(w, r, &message, 1<<20) != nil ||
 		n.config.Peers[message.From] == "" || !message.IsFor(n.config.PartyID) {
@@ -30,7 +32,7 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	session := n.sessions[id]
+	session := n.sessions[batchID]
 	if session == nil {
 		http.Error(w, "waiting for local MPC request", http.StatusNotFound)
 		return
@@ -41,8 +43,16 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 	case "failed":
 		http.Error(w, "MPC session failed on this node", http.StatusConflict)
 	default:
+		incoming := session.incoming
+		if presign {
+			if slot >= len(session.presignInboxes) {
+				http.Error(w, "invalid presign slot", http.StatusBadRequest)
+				return
+			}
+			incoming = session.presignInboxes[slot]
+		}
 		select {
-		case session.incoming <- &message:
+		case incoming <- &message:
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.Error(w, "MPC inbox is full", http.StatusServiceUnavailable)
@@ -51,6 +61,10 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func validPeerSessionID(id string) bool {
+	if strings.HasPrefix(id, ecdsaPresignPrefix) {
+		batchID, _, ok := splitPresignRoute(id)
+		return ok && memorySessionPattern.MatchString(strings.TrimPrefix(batchID, ecdsaPresignPrefix))
+	}
 	if sessionID, ok := strings.CutPrefix(id, frostSignPrefix); ok {
 		return memorySessionPattern.MatchString(sessionID)
 	}
@@ -64,6 +78,15 @@ func validPeerSessionID(id string) bool {
 		return memorySessionPattern.MatchString(sessionID)
 	}
 	return sessionIDPattern.MatchString(id)
+}
+
+func splitPresignRoute(id string) (batchID string, slot int, ok bool) {
+	if !strings.HasPrefix(id, ecdsaPresignPrefix) {
+		return id, 0, false
+	}
+	batchID, rawSlot, ok := strings.Cut(id[len(ecdsaPresignPrefix):], ".")
+	index, err := strconv.ParseUint(rawSlot, 10, 8)
+	return ecdsaPresignPrefix + batchID, int(index), ok && err == nil && index < maxPresignCount
 }
 
 func (n *node) sendMessage(ctx context.Context, id string, message *protocol.Message, participants party.IDSlice) error {

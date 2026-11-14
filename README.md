@@ -52,6 +52,8 @@
 
 `messageHash` 是标准 Base64 编码的 32 字节摘要。可传非硬化 BIP32 路径使用派生密钥。每个参与节点返回 `{"signature":"..."}`，其中 `signature` 是完整的 DER ECDSA 签名，使用标准 Base64 编码，可直接验签。签名会话和结果保留在进程内存中。
 
+`POST /ecdsa/keys/{keyID}/{count}/presiggen?mpc_routing_id=<routingID>` 为根密钥批量预计算。向指定的 `MPC-Players` 并发发送空请求体，使用同一个新会话 ID。单批支持 1 至 8 份。节点将整批本地材料写入各自的 `node.sqlite` 后返回 `{"ids":["..."]}`。调用方应等全部参与节点成功并比对有序 ID 列表。已完成的同参数会话在重启后也返回原批次 ID。预签名材料用于本机联调，使用与密钥分片相同的存储保护。消费预签名的接口待实现。
+
 ## FROST-Ed25519 建钥接口
 
 `POST /frost/keys?mpc_routing_id=<routingID>` 沿用上面的会话头、路由 ID 算法和同步响应格式。对三个节点并发发送同一份请求，例如 `{"threshold":1,"curve":"ed25519","keyID":""}`。支持安全阈值 `1`（2-of-3）和 `2`（3-of-3），建钥均由三个节点参与。

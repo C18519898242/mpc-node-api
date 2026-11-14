@@ -26,6 +26,7 @@ func (n *node) restHandler() http.Handler {
 	mux.HandleFunc("POST /ecdsa/keys", n.logRequest("keygen", "ecdsa", n.generateECDSAKey))
 	mux.HandleFunc("POST /ecdsa/keys/{keyID}/publickey", n.logRequest("publickey", "ecdsa", n.ecdsaPublicKey))
 	mux.HandleFunc("POST /ecdsa/keys/{keyID}/sign", n.logRequest("sign", "ecdsa", n.signECDSA))
+	mux.HandleFunc("POST /ecdsa/keys/{keyID}/{count}/presiggen", n.logRequest("presiggen", "ecdsa", n.generateECDSAPresign))
 	mux.HandleFunc("POST /frost/keys", n.logRequest("keygen", "frost", n.generateFROSTKey))
 	mux.HandleFunc("POST /frost/keys/{keyID}/publickey", n.logRequest("publickey", "frost", n.frostPublicKey))
 	mux.HandleFunc("POST /frost/keys/{keyID}/sign", n.logRequest("sign", "frost", n.signFROST))

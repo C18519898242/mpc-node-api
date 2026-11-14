@@ -17,12 +17,14 @@ import (
 const keygenTimeout = 3 * time.Minute
 
 type keygenSession struct {
-	incoming    chan *protocol.Message
-	status      keygenStatus
-	done        chan struct{}
-	key         keystore.Key
-	signBinding [32]byte
-	signature   []byte
+	incoming       chan *protocol.Message
+	status         keygenStatus
+	done           chan struct{}
+	key            keystore.Key
+	signBinding    [32]byte
+	signature      []byte
+	presignInboxes []chan *protocol.Message
+	presignIDs     []string
 }
 
 type keygenStatus struct {
