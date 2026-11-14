@@ -2,6 +2,13 @@
 
 单个 MPC 节点的 Go HTTP 服务。当前支持 CMP（secp256k1 ECDSA）3-of-3 建钥，并固定 CMP 和 FROST-Ed25519 的 Go 依赖版本。
 
+## 代码结构
+
+- `main.go` 解析启动参数并选择运行模式。
+- `internal/config` 加载节点 JSON 配置，校验监听地址并解析数据目录。
+- `internal/node` 运行单节点。 `server.go` 管理监听端口，`rest.go` 处理业务请求，`peer.go` 收发节点消息，`keygen.go` 管理会话和 CMP 轮次，`shares.go` 读写本地分片。
+- `configs` 和 `scripts` 提供三节点配置、启动命令和 HTTP 冒烟测试。
+
 ## Windows 三节点联调
 
 在仓库根目录运行以下命令。脚本编译一次并启动三个独立进程，使用 `-Configs` 可以指定三份 JSON 配置。按 Ctrl+C 停止。

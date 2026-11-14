@@ -1,0 +1,115 @@
+package node
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"time"
+
+	"github.com/taurusgroup/multi-party-sig/pkg/math/curve"
+	"github.com/taurusgroup/multi-party-sig/pkg/party"
+	"github.com/taurusgroup/multi-party-sig/pkg/protocol"
+	"github.com/taurusgroup/multi-party-sig/protocols/cmp"
+)
+
+const keygenTimeout = 3 * time.Minute
+
+type keygenSession struct {
+	incoming chan *protocol.Message
+	status   keygenStatus
+}
+
+type keygenStatus struct {
+	SessionID string `json:"sessionId"`
+	State     string `json:"state"`
+	PublicKey string `json:"publicKey,omitempty"`
+}
+
+func (n *node) beginKeygen(id string) (status keygenStatus, started bool, err error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	status, err = n.lookupKeygen(id)
+	if err == nil {
+		return status, false, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return keygenStatus{}, false, err
+	}
+	if err := n.recordKeygenAttempt(id); err != nil {
+		return keygenStatus{}, false, fmt.Errorf("%w: %w", errRecordKeygenAttempt, err)
+	}
+	session := &keygenSession{
+		incoming: make(chan *protocol.Message, 32),
+		status:   keygenStatus{SessionID: id, State: "running"},
+	}
+	n.sessions[id] = session
+	go n.runKeygen(id, session)
+	return session.status, true, nil
+}
+
+var errRecordKeygenAttempt = errors.New("record keygen attempt")
+
+func (n *node) getKeygenStatus(id string) (keygenStatus, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.lookupKeygen(id)
+}
+
+// lookupKeygen requires n.mu to be held.
+func (n *node) lookupKeygen(id string) (keygenStatus, error) {
+	if session, ok := n.sessions[id]; ok {
+		return session.status, nil
+	}
+	return n.loadKeygenStatus(id)
+}
+
+func (n *node) runKeygen(id string, session *keygenSession) {
+	ctx, cancel := context.WithTimeout(context.Background(), keygenTimeout)
+	defer cancel()
+
+	status, err := n.executeKeygen(ctx, id, session.incoming)
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err != nil {
+		log.Printf("node %s: keygen %s failed: %v", n.config.PartyID, id, err)
+		session.status.State = "failed"
+		return
+	}
+	session.status = status
+}
+
+func (n *node) executeKeygen(ctx context.Context, id string, incoming <-chan *protocol.Message) (keygenStatus, error) {
+	parties := []party.ID{n.config.PartyID}
+	for peer := range n.config.Peers {
+		parties = append(parties, peer)
+	}
+	// CMP's threshold is the number of shares that cannot sign. Use 2 for 3-of-3.
+	start := cmp.Keygen(curve.Secp256k1{}, n.config.PartyID, parties, 2, nil)
+	handler, err := protocol.NewMultiHandler(start, []byte(id))
+	if err != nil {
+		return keygenStatus{}, err
+	}
+	outgoing := handler.Listen()
+	for {
+		select {
+		case <-ctx.Done():
+			return keygenStatus{}, ctx.Err()
+		case message := <-incoming:
+			handler.Accept(message)
+		case message, open := <-outgoing:
+			if !open {
+				result, err := handler.Result()
+				if err != nil {
+					return keygenStatus{}, err
+				}
+				return n.saveShare(id, result.(*cmp.Config))
+			}
+			if err := n.sendMessage(ctx, id, message); err != nil {
+				return keygenStatus{}, err
+			}
+		}
+	}
+}

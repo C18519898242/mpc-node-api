@@ -1,4 +1,4 @@
-package main
+package node
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 
 func TestHealth(t *testing.T) {
 	response := httptest.NewRecorder()
-	newHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	healthMux().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)

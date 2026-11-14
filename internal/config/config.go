@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"encoding/json"
@@ -10,7 +10,7 @@ import (
 	"github.com/taurusgroup/multi-party-sig/pkg/party"
 )
 
-type nodeConfig struct {
+type Config struct {
 	PartyID  party.ID            `json:"partyId"`
 	RESTAddr string              `json:"restAddr"`
 	MPCAddr  string              `json:"mpcAddr"`
@@ -18,8 +18,9 @@ type nodeConfig struct {
 	Peers    map[party.ID]string `json:"peers"`
 }
 
-func loadNodeConfig(path string) (nodeConfig, error) {
-	var cfg nodeConfig
+// Load reads and validates a local node configuration.
+func Load(path string) (Config, error) {
+	var cfg Config
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return cfg, err
