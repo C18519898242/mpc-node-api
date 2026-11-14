@@ -51,7 +51,10 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 
 func validPeerSessionID(id string) bool {
 	if sessionID, ok := strings.CutPrefix(id, ecdsaSessionPrefix); ok {
-		return ecdsaSessionPattern.MatchString(sessionID)
+		return memorySessionPattern.MatchString(sessionID)
+	}
+	if sessionID, ok := strings.CutPrefix(id, frostSessionPrefix); ok {
+		return memorySessionPattern.MatchString(sessionID)
 	}
 	return sessionIDPattern.MatchString(id)
 }

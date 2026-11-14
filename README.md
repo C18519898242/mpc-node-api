@@ -1,12 +1,13 @@
 # mpc-node-api
 
-单个 MPC 节点的 Go HTTP 服务。当前支持 CMP（secp256k1 ECDSA）3-of-3 建钥，并固定 CMP 和 FROST-Ed25519 的 Go 依赖版本。
+单个 MPC 节点的 Go HTTP 服务。当前支持 CMP（secp256k1 ECDSA）和 FROST-Ed25519 三节点建钥。
 
 ## 代码结构
 
 - `main.go` 解析启动参数并选择运行模式。
 - `internal/config` 加载节点 JSON 配置，校验监听地址并解析数据目录。
-- `internal/node` 运行单节点。 `server.go` 管理监听端口，`rest.go` 处理业务请求，`peer.go` 收发节点消息，`keygen.go` 管理会话和 CMP 轮次，`shares.go` 读写本地分片。
+- `internal/node` 运行单节点，处理 REST、节点通信和 CMP / FROST 建钥。
+- `internal/keystore` 管理 SQLite 中的建钥记录和分片。
 - `configs` 和 `scripts` 提供三节点配置、启动命令和 HTTP 冒烟测试。
 
 ## Windows 三节点联调
@@ -28,7 +29,7 @@
 
 单节点可用 `go run . -config configs/node-1.json` 启动。配置中的相对数据目录以配置文件所在目录为基准。
 
-这套配置用于本机联调，监听地址限制在回环接口。MPC 消息使用本地 HTTP，分片以 CMP 二进制格式写入各节点的数据目录。只使用测试密钥。
+这套配置用于本机联调，监听地址限制在回环接口。MPC 消息使用本地 HTTP。脚本的 `-Smoke` 调用旧的 `/v1/keygen`，分片以 CMP 二进制文件写入各节点的数据目录。只使用测试密钥。
 
 ## ECDSA 建钥接口
 
@@ -39,7 +40,21 @@
 - `MPC-Players` 每个玩家一条请求头，默认配置的玩家 ID 为 `1`、`2`、`3`，顺序不限。
 - 三个节点各自完成建钥后返回 HTTP 200 和 `{"keyID":"..."}`。传空 `keyID` 时，各节点从会话 ID 生成相同的 ID。调用方应等待三个响应并比对 ID。
 
-此接口用于本机联调，采用静态玩家和服务端固定会话超时。每个节点的分片只保留在内存，重启后失效。
+此接口采用静态玩家和服务端固定会话超时。节点把分片写入 SQLite 后返回成功。
+
+## FROST-Ed25519 建钥接口
+
+`POST /frost/keys?mpc_routing_id=<routingID>` 沿用上面的会话头、路由 ID 算法和同步响应格式。对三个节点并发发送同一份请求，例如 `{"threshold":1,"curve":"ed25519","keyID":""}`。支持安全阈值 `1`（2-of-3）和 `2`（3-of-3），建钥均由三个节点参与。
+
+节点把本地分片和 FROST 公共信息写入 SQLite 后返回成功。
+
+## 节点数据库
+
+`/ecdsa/keys` 和 `/frost/keys` 使用各节点 `dataDir` 下的 `node.sqlite`。默认路径为 `data/node-1/node.sqlite`、`data/node-2/node.sqlite` 和 `data/node-3/node.sqlite`。数据库会记录所属节点，拒绝用其他节点 ID 打开。
+
+同一建钥请求在重启后重发时，已落库的节点返回原 `keyID`。节点重启前未写完的会话会拒绝重放。如需重新建钥，请用新的会话 ID 和新的密钥 ID（或留空生成）。
+
+数据库中的分片尚未加密，仅存放开发测试密钥。数据库访问集中在 `internal/keystore`，后续可在该边界实现 MySQL 或 PostgreSQL。
 
 ## 本地运行
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/C18519898242/mpc-node-api/internal/config"
+	"github.com/C18519898242/mpc-node-api/internal/keystore"
 )
 
 // ServeHealth runs the health-only HTTP server.
@@ -29,6 +30,12 @@ func httpServer(addr string, handler http.Handler) *http.Server {
 // Serve runs the REST and peer listeners for a single node.
 func Serve(cfg config.Config) error {
 	n := newNode(cfg)
+	keys, err := keystore.OpenNodeSQLite(cfg.DataDir, string(cfg.PartyID))
+	if err != nil {
+		return err
+	}
+	defer keys.Close()
+	n.keys = keys
 	rest, err := net.Listen("tcp", n.config.RESTAddr)
 	if err != nil {
 		return err

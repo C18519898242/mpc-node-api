@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/C18519898242/mpc-node-api/internal/keystore"
 	"github.com/taurusgroup/multi-party-sig/pkg/math/curve"
 	"github.com/taurusgroup/multi-party-sig/pkg/party"
 	"github.com/taurusgroup/multi-party-sig/pkg/protocol"
@@ -17,12 +18,10 @@ import (
 const keygenTimeout = 3 * time.Minute
 
 type keygenSession struct {
-	incoming  chan *protocol.Message
-	status    keygenStatus
-	done      chan struct{}
-	share     *cmp.Config
-	keyID     string
-	threshold int
+	incoming chan *protocol.Message
+	status   keygenStatus
+	done     chan struct{}
+	key      keystore.Key
 }
 
 type keygenStatus struct {
