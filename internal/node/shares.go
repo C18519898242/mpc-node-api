@@ -23,14 +23,22 @@ func (n *node) loadKeygenStatus(id string) (keygenStatus, error) {
 		return keygenStatus{}, err
 	}
 	defer clear(data)
-	config := cmp.EmptyConfig(curve.Secp256k1{})
-	if err := config.UnmarshalBinary(data); err != nil {
+	config, err := n.decodeCMPShare(data)
+	if err != nil {
 		return keygenStatus{}, err
 	}
-	if config.ID != n.config.PartyID {
-		return keygenStatus{}, errors.New("stored share belongs to a different node")
-	}
 	return completedStatus(id, config)
+}
+
+func (n *node) decodeCMPShare(data []byte) (*cmp.Config, error) {
+	config := cmp.EmptyConfig(curve.Secp256k1{})
+	if err := config.UnmarshalBinary(data); err != nil {
+		return nil, err
+	}
+	if config.ID != n.config.PartyID {
+		return nil, errors.New("stored share belongs to a different node")
+	}
+	return config, nil
 }
 
 func (n *node) sharePath(id string) string {

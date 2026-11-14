@@ -13,6 +13,7 @@ import (
 type shareStore interface {
 	Reserve(context.Context, keystore.Key) (keystore.Reservation, error)
 	Save(context.Context, keystore.Key, []byte) error
+	Load(context.Context, string, string) ([]byte, error)
 }
 
 type node struct {

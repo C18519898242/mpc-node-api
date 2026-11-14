@@ -42,6 +42,8 @@
 
 此接口采用静态玩家和服务端固定会话超时。节点把分片写入 SQLite 后返回成功。
 
+`POST /ecdsa/keys/{keyID}/publickey` 可以向任意持有该密钥分片的单个节点查询公钥，无需 MPC 会话头。请求体 `{"chainPath":null}` 查询根公钥，`{"chainPath":[0,1]}` 查询非硬化 BIP32 派生公钥。响应的 `curve` 为 `secp256k1`，`publicKey` 是标准 Base64 编码的 65 字节未压缩 SEC1 点。
+
 ## FROST-Ed25519 建钥接口
 
 `POST /frost/keys?mpc_routing_id=<routingID>` 沿用上面的会话头、路由 ID 算法和同步响应格式。对三个节点并发发送同一份请求，例如 `{"threshold":1,"curve":"ed25519","keyID":""}`。支持安全阈值 `1`（2-of-3）和 `2`（3-of-3），建钥均由三个节点参与。
