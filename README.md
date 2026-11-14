@@ -52,6 +52,8 @@
 
 `/ecdsa/keys` 和 `/frost/keys` 使用各节点 `dataDir` 下的 `node.sqlite`。默认路径为 `data/node-1/node.sqlite`、`data/node-2/node.sqlite` 和 `data/node-3/node.sqlite`。数据库会记录所属节点，拒绝用其他节点 ID 打开。
 
+`key_shares.id` 是各节点库内的自增主键。`key_id` 仍用于 API 查询，在同一算法内唯一。`created_at` 是建钥记录写入时的 UTC 时间。旧库在启动时自动升级，原有记录的创建时间留为 `NULL`。
+
 同一建钥请求在重启后重发时，已落库的节点返回原 `keyID`。节点重启前未写完的会话会拒绝重放。如需重新建钥，请用新的会话 ID 和新的密钥 ID（或留空生成）。
 
 数据库中的分片尚未加密，仅存放开发测试密钥。数据库访问集中在 `internal/keystore`，后续可在该边界实现 MySQL 或 PostgreSQL。

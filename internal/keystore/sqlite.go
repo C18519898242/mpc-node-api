@@ -80,18 +80,48 @@ func initSQLite(db *sql.DB, partyID string) error {
 	if owner != partyID {
 		return errors.New("key database belongs to a different MPC node")
 	}
-	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS key_shares (
-		algorithm TEXT NOT NULL,
-		session_id TEXT NOT NULL,
-		key_id TEXT NOT NULL,
-		threshold INTEGER NOT NULL,
-		share BLOB,
-		PRIMARY KEY (algorithm, key_id),
-		UNIQUE (algorithm, session_id)
-	)`); err != nil {
+	if err := migrateKeyShares(tx); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+const createKeyShares = `CREATE TABLE IF NOT EXISTS key_shares (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	algorithm TEXT NOT NULL,
+	session_id TEXT NOT NULL,
+	key_id TEXT NOT NULL,
+	threshold INTEGER NOT NULL,
+	share BLOB,
+	created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+	UNIQUE (algorithm, key_id),
+	UNIQUE (algorithm, session_id)
+)`
+
+func migrateKeyShares(tx *sql.Tx) error {
+	var legacy bool
+	if err := tx.QueryRow(`SELECT EXISTS (
+		SELECT 1 FROM pragma_table_info('key_shares') WHERE name = 'algorithm' AND pk > 0
+	)`).Scan(&legacy); err != nil {
+		return err
+	}
+	if !legacy {
+		_, err := tx.Exec(createKeyShares)
+		return err
+	}
+	// The old schema recorded no creation time. Preserve row order via rowid.
+	for _, query := range []string{
+		"ALTER TABLE key_shares RENAME TO key_shares_legacy",
+		createKeyShares,
+		`INSERT INTO key_shares (id, algorithm, session_id, key_id, threshold, share, created_at)
+		 SELECT rowid, algorithm, session_id, key_id, threshold, share, NULL FROM key_shares_legacy`,
+		"DROP TABLE key_shares_legacy",
+	} {
+		if _, err := tx.Exec(query); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Reserve records the session before keygen. A row with no share represents an
