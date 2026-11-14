@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/taurusgroup/multi-party-sig/pkg/protocol"
@@ -20,7 +21,7 @@ func (n *node) peerHandler() http.Handler {
 func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("sessionId")
 	var message protocol.Message
-	if !sessionIDPattern.MatchString(id) || decodeJSON(w, r, &message, 1<<20) != nil ||
+	if !validPeerSessionID(id) || decodeJSON(w, r, &message, 1<<20) != nil ||
 		n.config.Peers[message.From] == "" || !message.IsFor(n.config.PartyID) {
 		http.Error(w, "invalid MPC message", http.StatusBadRequest)
 		return
@@ -46,6 +47,13 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "MPC inbox is full", http.StatusServiceUnavailable)
 		}
 	}
+}
+
+func validPeerSessionID(id string) bool {
+	if sessionID, ok := strings.CutPrefix(id, ecdsaSessionPrefix); ok {
+		return ecdsaSessionPattern.MatchString(sessionID)
+	}
+	return sessionIDPattern.MatchString(id)
 }
 
 func (n *node) sendMessage(ctx context.Context, id string, message *protocol.Message) error {

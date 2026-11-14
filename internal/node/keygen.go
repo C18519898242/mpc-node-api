@@ -17,8 +17,12 @@ import (
 const keygenTimeout = 3 * time.Minute
 
 type keygenSession struct {
-	incoming chan *protocol.Message
-	status   keygenStatus
+	incoming  chan *protocol.Message
+	status    keygenStatus
+	done      chan struct{}
+	share     *cmp.Config
+	keyID     string
+	threshold int
 }
 
 type keygenStatus struct {
@@ -70,7 +74,11 @@ func (n *node) runKeygen(id string, session *keygenSession) {
 	ctx, cancel := context.WithTimeout(context.Background(), keygenTimeout)
 	defer cancel()
 
-	status, err := n.executeKeygen(ctx, id, session.incoming)
+	share, err := n.executeKeygen(ctx, id, []byte(id), 2, session.incoming)
+	var status keygenStatus
+	if err == nil {
+		status, err = n.saveShare(id, share)
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err != nil {
@@ -81,34 +89,33 @@ func (n *node) runKeygen(id string, session *keygenSession) {
 	session.status = status
 }
 
-func (n *node) executeKeygen(ctx context.Context, id string, incoming <-chan *protocol.Message) (keygenStatus, error) {
+func (n *node) executeKeygen(ctx context.Context, id string, protocolID []byte, threshold int, incoming <-chan *protocol.Message) (*cmp.Config, error) {
 	parties := []party.ID{n.config.PartyID}
 	for peer := range n.config.Peers {
 		parties = append(parties, peer)
 	}
-	// CMP's threshold is the number of shares that cannot sign. Use 2 for 3-of-3.
-	start := cmp.Keygen(curve.Secp256k1{}, n.config.PartyID, parties, 2, nil)
-	handler, err := protocol.NewMultiHandler(start, []byte(id))
+	start := cmp.Keygen(curve.Secp256k1{}, n.config.PartyID, parties, threshold, nil)
+	handler, err := protocol.NewMultiHandler(start, protocolID)
 	if err != nil {
-		return keygenStatus{}, err
+		return nil, err
 	}
 	outgoing := handler.Listen()
 	for {
 		select {
 		case <-ctx.Done():
-			return keygenStatus{}, ctx.Err()
+			return nil, ctx.Err()
 		case message := <-incoming:
 			handler.Accept(message)
 		case message, open := <-outgoing:
 			if !open {
 				result, err := handler.Result()
 				if err != nil {
-					return keygenStatus{}, err
+					return nil, err
 				}
-				return n.saveShare(id, result.(*cmp.Config))
+				return result.(*cmp.Config), nil
 			}
 			if err := n.sendMessage(ctx, id, message); err != nil {
-				return keygenStatus{}, err
+				return nil, err
 			}
 		}
 	}

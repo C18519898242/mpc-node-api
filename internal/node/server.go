@@ -41,7 +41,9 @@ func Serve(cfg config.Config) error {
 	defer mpc.Close()
 
 	serveErrors := make(chan error, 2)
-	go func() { serveErrors <- httpServer(n.config.RESTAddr, n.restHandler()).Serve(rest) }()
+	restServer := httpServer(n.config.RESTAddr, n.restHandler())
+	restServer.WriteTimeout = keygenTimeout + restServer.ReadTimeout + 5*time.Second
+	go func() { serveErrors <- restServer.Serve(rest) }()
 	go func() { serveErrors <- httpServer(n.config.MPCAddr, n.peerHandler()).Serve(mpc) }()
 	log.Printf("node %s listening on REST %s and MPC %s", n.config.PartyID, rest.Addr(), mpc.Addr())
 	return <-serveErrors
