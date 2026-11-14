@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/taurusgroup/multi-party-sig/pkg/party"
 	"github.com/taurusgroup/multi-party-sig/pkg/protocol"
 )
 
@@ -31,14 +32,14 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 	defer n.mu.Unlock()
 	session := n.sessions[id]
 	if session == nil {
-		http.Error(w, "waiting for local keygen request", http.StatusNotFound)
+		http.Error(w, "waiting for local MPC request", http.StatusNotFound)
 		return
 	}
 	switch session.status.State {
 	case "succeeded":
 		w.WriteHeader(http.StatusNoContent)
 	case "failed":
-		http.Error(w, "keygen failed on this node", http.StatusConflict)
+		http.Error(w, "MPC session failed on this node", http.StatusConflict)
 	default:
 		select {
 		case session.incoming <- &message:
@@ -50,6 +51,9 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func validPeerSessionID(id string) bool {
+	if sessionID, ok := strings.CutPrefix(id, ecdsaSignPrefix); ok {
+		return memorySessionPattern.MatchString(sessionID)
+	}
 	if sessionID, ok := strings.CutPrefix(id, ecdsaSessionPrefix); ok {
 		return memorySessionPattern.MatchString(sessionID)
 	}
@@ -59,13 +63,13 @@ func validPeerSessionID(id string) bool {
 	return sessionIDPattern.MatchString(id)
 }
 
-func (n *node) sendMessage(ctx context.Context, id string, message *protocol.Message) error {
+func (n *node) sendMessage(ctx context.Context, id string, message *protocol.Message, participants party.IDSlice) error {
 	body, err := json.Marshal(message)
 	if err != nil {
 		return err
 	}
 	for peer, addr := range n.config.Peers {
-		if !message.IsFor(peer) {
+		if !message.IsFor(peer) || (participants != nil && !participants.Contains(peer)) {
 			continue
 		}
 		url := "http://" + addr + "/internal/mpc/" + id

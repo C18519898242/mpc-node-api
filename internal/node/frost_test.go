@@ -91,6 +91,38 @@ func TestGenerateFROSTKey(t *testing.T) {
 			t.Fatalf("node %s has inconsistent public data", n.config.PartyID)
 		}
 		publicKey = got
+
+		for _, tc := range []struct {
+			keyID string
+			body  string
+			code  int
+		}{
+			{keyID, `{"chainPath":null}`, http.StatusOK},
+			{keyID, `{"chainPath":[]}`, http.StatusOK},
+			{keyID, `{"chainPath":[0]}`, http.StatusBadRequest},
+			{"unknown-key", `{"chainPath":null}`, http.StatusNotFound},
+		} {
+			request := httptest.NewRequest(http.MethodPost, "/frost/keys/"+tc.keyID+"/publickey",
+				strings.NewReader(tc.body))
+			response := httptest.NewRecorder()
+			n.restHandler().ServeHTTP(response, request)
+			if response.Code != tc.code {
+				t.Fatalf("node %s key %s body %s: status = %d, want %d",
+					n.config.PartyID, tc.keyID, tc.body, response.Code, tc.code)
+			}
+			if tc.code == http.StatusOK {
+				var body struct {
+					Curve     string `json:"curve"`
+					PublicKey []byte `json:"publicKey"`
+				}
+				if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if body.Curve != "ed25519" || string(body.PublicKey) != got {
+					t.Fatalf("node %s returned a different public key", n.config.PartyID)
+				}
+			}
+		}
 	}
 }
 

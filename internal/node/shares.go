@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"os"
@@ -9,6 +10,28 @@ import (
 	"github.com/taurusgroup/multi-party-sig/pkg/math/curve"
 	"github.com/taurusgroup/multi-party-sig/protocols/cmp"
 )
+
+func (n *node) loadECDSAShare(ctx context.Context, keyID string, path []uint32) (*cmp.Config, error) {
+	data, err := n.keys.Load(ctx, "ecdsa", keyID)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(data)
+	share, err := n.decodeCMPShare(data)
+	if err != nil {
+		return nil, err
+	}
+	for _, index := range path {
+		if index >= 1<<31 {
+			return nil, errInvalidChainPath
+		}
+		share, err = share.DeriveBIP32(index)
+		if err != nil {
+			return nil, errInvalidChainPath
+		}
+	}
+	return share, nil
+}
 
 func (n *node) loadKeygenStatus(id string) (keygenStatus, error) {
 	data, err := os.ReadFile(n.sharePath(id))

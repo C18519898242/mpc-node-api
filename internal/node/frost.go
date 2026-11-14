@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"slices"
 
+	"github.com/taurusgroup/frost-ed25519/pkg/eddsa"
 	"github.com/taurusgroup/frost-ed25519/pkg/frost"
 	"github.com/taurusgroup/frost-ed25519/pkg/frost/keygen"
 	frostparty "github.com/taurusgroup/frost-ed25519/pkg/frost/party"
@@ -18,6 +22,58 @@ import (
 )
 
 const frostSessionPrefix = "frost."
+
+func (n *node) frostPublicKey(w http.ResponseWriter, r *http.Request) {
+	keyID := r.PathValue("keyID")
+	var request struct {
+		ChainPath []uint32 `json:"chainPath"`
+	}
+	if !keyIDPattern.MatchString(keyID) || decodeJSON(w, r, &request, 4096) != nil {
+		http.Error(w, "invalid public key request", http.StatusBadRequest)
+		return
+	}
+	if len(request.ChainPath) != 0 {
+		http.Error(w, "FROST public key lookup supports the root key only", http.StatusBadRequest)
+		return
+	}
+
+	point, err := n.loadFROSTPublicKey(r.Context(), keyID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		http.NotFound(w, r)
+	case err != nil:
+		log.Printf("node %s: FROST public key lookup for %s: %v", n.config.PartyID, keyID, err)
+		http.Error(w, "could not read FROST public key", http.StatusInternalServerError)
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			Curve     string `json:"curve"`
+			PublicKey []byte `json:"publicKey"`
+		}{"ed25519", point})
+	}
+}
+
+func (n *node) loadFROSTPublicKey(ctx context.Context, keyID string) ([]byte, error) {
+	data, err := n.keys.Load(ctx, "frost", keyID)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(data)
+
+	// Read the group key from the stored keygen output without decoding the secret share.
+	var share struct {
+		Public struct {
+			GroupKey *eddsa.PublicKey `json:"groupkey"`
+		}
+	}
+	if err := json.Unmarshal(data, &share); err != nil {
+		return nil, err
+	}
+	if share.Public.GroupKey == nil {
+		return nil, errors.New("stored FROST share is missing its group key")
+	}
+	return share.Public.GroupKey.ToEd25519(), nil
+}
 
 func (n *node) generateFROSTKey(w http.ResponseWriter, r *http.Request) {
 	n.generateKey(w, r, frostSessionPrefix, "ed25519", n.generateFROSTShare)
@@ -67,7 +123,7 @@ func (n *node) executeFROSTKeygen(ctx context.Context, id string, session *keyge
 			if !message.IsBroadcast() {
 				envelope.To = roster[int(message.To)-1]
 			}
-			if err := n.sendMessage(ctx, id, envelope); err != nil {
+			if err := n.sendMessage(ctx, id, envelope, nil); err != nil {
 				return nil, err
 			}
 		}

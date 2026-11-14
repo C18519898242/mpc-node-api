@@ -50,20 +50,9 @@ func (n *node) ecdsaPublicKey(w http.ResponseWriter, r *http.Request) {
 var errInvalidChainPath = errors.New("invalid BIP32 path")
 
 func (n *node) loadECDSAPublicKey(ctx context.Context, keyID string, path []uint32) ([]byte, error) {
-	data, err := n.keys.Load(ctx, "ecdsa", keyID)
+	share, err := n.loadECDSAShare(ctx, keyID, path)
 	if err != nil {
 		return nil, err
-	}
-	defer clear(data)
-	share, err := n.decodeCMPShare(data)
-	if err != nil {
-		return nil, err
-	}
-	for _, index := range path {
-		share, err = share.DeriveBIP32(index)
-		if err != nil {
-			return nil, errInvalidChainPath
-		}
 	}
 	compressed, err := share.PublicPoint().MarshalBinary()
 	if err != nil {

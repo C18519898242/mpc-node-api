@@ -44,11 +44,21 @@
 
 `POST /ecdsa/keys/{keyID}/publickey` 可以向任意持有该密钥分片的单个节点查询公钥，无需 MPC 会话头。请求体 `{"chainPath":null}` 查询根公钥，`{"chainPath":[0,1]}` 查询非硬化 BIP32 派生公钥。响应的 `curve` 为 `secp256k1`，`publicKey` 是标准 Base64 编码的 65 字节未压缩 SEC1 点。
 
+`POST /ecdsa/keys/{keyID}/sign?mpc_routing_id=<routingID>` 使用与建钥相同的会话头和路由 ID 算法。每次签名使用新的 `MPC-SessionID`，只向 `MPC-Players` 指定的节点并发发送相同请求。参与方数量至少为建钥时的 `threshold + 1`。
+
+```json
+{"chainPath":null,"messageHash":"IRNprmnFIL3etbcSMvcRoCCABjD63A1AAJYHEsj8OoA="}
+```
+
+`messageHash` 是标准 Base64 编码的 32 字节摘要。可传非硬化 BIP32 路径使用派生密钥。每个参与节点返回 `{"signature":"..."}`，其中 `signature` 是完整的 DER ECDSA 签名，使用标准 Base64 编码，可直接验签。签名会话和结果保留在进程内存中。
+
 ## FROST-Ed25519 建钥接口
 
 `POST /frost/keys?mpc_routing_id=<routingID>` 沿用上面的会话头、路由 ID 算法和同步响应格式。对三个节点并发发送同一份请求，例如 `{"threshold":1,"curve":"ed25519","keyID":""}`。支持安全阈值 `1`（2-of-3）和 `2`（3-of-3），建钥均由三个节点参与。
 
 节点把本地分片和 FROST 公共信息写入 SQLite 后返回成功。
+
+`POST /frost/keys/{keyID}/publickey` 可向任意持有分片的单个节点查询 Ed25519 根公钥，无需 MPC 会话头。请求体传 `{"chainPath":null}` 或 `{"chainPath":[]}`。响应的 `curve` 为 `ed25519`，`publicKey` 是标准 Base64 编码的 32 字节 Ed25519 公钥。非空派生路径返回 HTTP 400。
 
 ## 节点数据库
 

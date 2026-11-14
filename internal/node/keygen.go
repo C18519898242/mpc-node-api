@@ -18,10 +18,12 @@ import (
 const keygenTimeout = 3 * time.Minute
 
 type keygenSession struct {
-	incoming chan *protocol.Message
-	status   keygenStatus
-	done     chan struct{}
-	key      keystore.Key
+	incoming    chan *protocol.Message
+	status      keygenStatus
+	done        chan struct{}
+	key         keystore.Key
+	signBinding [32]byte
+	signature   []byte
 }
 
 type keygenStatus struct {
@@ -94,6 +96,14 @@ func (n *node) executeKeygen(ctx context.Context, id string, protocolID []byte, 
 		parties = append(parties, peer)
 	}
 	start := cmp.Keygen(curve.Secp256k1{}, n.config.PartyID, parties, threshold, nil)
+	result, err := n.runCMP(ctx, id, protocolID, start, incoming, nil)
+	if err != nil {
+		return nil, err
+	}
+	return result.(*cmp.Config), nil
+}
+
+func (n *node) runCMP(ctx context.Context, id string, protocolID []byte, start protocol.StartFunc, incoming <-chan *protocol.Message, participants party.IDSlice) (any, error) {
 	handler, err := protocol.NewMultiHandler(start, protocolID)
 	if err != nil {
 		return nil, err
@@ -107,13 +117,9 @@ func (n *node) executeKeygen(ctx context.Context, id string, protocolID []byte, 
 			handler.Accept(message)
 		case message, open := <-outgoing:
 			if !open {
-				result, err := handler.Result()
-				if err != nil {
-					return nil, err
-				}
-				return result.(*cmp.Config), nil
+				return handler.Result()
 			}
-			if err := n.sendMessage(ctx, id, message); err != nil {
+			if err := n.sendMessage(ctx, id, message, participants); err != nil {
 				return nil, err
 			}
 		}
