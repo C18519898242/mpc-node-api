@@ -21,6 +21,7 @@ type shareStore interface {
 	SaveFROSTPresign(context.Context, string, []keystore.Presignature) ([]string, error)
 	ConsumeECDSAPresign(context.Context, string, string) (keystore.Presignature, error)
 	ConsumeFROSTPresign(context.Context, string, string) (keystore.Presignature, error)
+	CountPresign(context.Context, string) (int, error)
 }
 
 type node struct {

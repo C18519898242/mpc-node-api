@@ -25,6 +25,25 @@ type preparePresign func(context.Context, string, party.IDSlice) (generatePresig
 type reservePresign func(context.Context, string, string, [32]byte) (keystore.Reservation, []string, error)
 type savePresign func(context.Context, string, []keystore.Presignature) ([]string, error)
 
+func (n *node) countPresign(w http.ResponseWriter, r *http.Request) {
+	keyID := r.PathValue("keyID")
+	var request *struct{}
+	if !keyIDPattern.MatchString(keyID) || decodeJSON(w, r, &request, 4096) != nil || request == nil {
+		http.Error(w, "invalid presign count request", http.StatusBadRequest)
+		return
+	}
+	count, err := n.keys.CountPresign(r.Context(), keyID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		http.NotFound(w, r)
+	case err != nil:
+		http.Error(w, "could not count presignatures", http.StatusInternalServerError)
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(count)
+	}
+}
+
 func (n *node) generatePresign(w http.ResponseWriter, r *http.Request, algorithm, prefix string, prepare preparePresign) {
 	sessionID := r.Header.Get("MPC-SessionID")
 	keyID := r.PathValue("keyID")

@@ -14,6 +14,17 @@ type Presignature struct {
 	Share []byte
 }
 
+func (s *SQLite) CountPresign(ctx context.Context, keyID string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT
+		(SELECT COUNT(*) FROM ecdsa_presignatures WHERE key_id = ?) +
+		(SELECT COUNT(*) FROM frost_presignatures WHERE key_id = ?)
+		WHERE EXISTS (
+			SELECT 1 FROM key_shares WHERE key_id = ? AND share IS NOT NULL
+		)`, keyID, keyID, keyID).Scan(&count)
+	return count, err
+}
+
 // ConsumeECDSAPresign atomically deletes and returns one local share. An empty
 // ID selects the oldest available share for the key.
 func (s *SQLite) ConsumeECDSAPresign(ctx context.Context, keyID, presignatureID string) (Presignature, error) {

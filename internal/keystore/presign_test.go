@@ -15,11 +15,24 @@ func TestConsumeECDSAPresignOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	key := Key{Algorithm: "ecdsa", SessionID: "keygen", KeyID: "key", Threshold: 1}
+	if _, err := store.Reserve(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CountPresign(ctx, "key"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("pending key count: %v", err)
+	}
+	if err := store.Save(ctx, key, []byte{1}); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := store.ReserveECDSAPresign(ctx, "batch", "key", [32]byte{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.SaveECDSAPresign(ctx, "batch", []Presignature{{ID: "first", Share: []byte{1}}, {ID: "second", Share: []byte{2}}}); err != nil {
 		t.Fatal(err)
+	}
+	if count, err := store.CountPresign(ctx, "key"); err != nil || count != 2 {
+		t.Fatalf("count = %d, %v, want 2", count, err)
 	}
 	if _, err := store.ConsumeECDSAPresign(ctx, "other-key", "first"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cross-key consumption: %v", err)
@@ -48,6 +61,9 @@ func TestConsumeECDSAPresignOnce(t *testing.T) {
 	}
 	if share, err := store.ConsumeECDSAPresign(ctx, "key", ""); err != nil || share.ID != "second" {
 		t.Fatalf("automatic selection failed: %v", err)
+	}
+	if count, err := store.CountPresign(ctx, "key"); err != nil || count != 0 {
+		t.Fatalf("remaining count = %d, %v, want 0", count, err)
 	}
 }
 
