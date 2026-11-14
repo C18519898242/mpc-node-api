@@ -1,10 +1,31 @@
 # mpc-node-api
 
-单个 MPC 节点的 Go HTTP 服务。当前提供 `GET /healthz`，并固定 CMP（secp256k1 ECDSA）和 FROST-Ed25519 的 Go 依赖版本。
+单个 MPC 节点的 Go HTTP 服务。当前支持 CMP（secp256k1 ECDSA）3-of-3 建钥，并固定 CMP 和 FROST-Ed25519 的 Go 依赖版本。
+
+## Windows 三节点联调
+
+在仓库根目录运行以下命令。脚本编译一次并启动三个独立进程，使用 `-Configs` 可以指定三份 JSON 配置。按 Ctrl+C 停止。
+
+```powershell
+.\scripts\dev-up.ps1
+.\scripts\dev-up.ps1 -Smoke
+```
+
+`-Smoke` 启动三节点，使用同一个随机 `sessionId` 向每个 REST 端口发起 `POST /v1/keygen`，轮询 `GET /v1/sessions/{sessionId}`，检查三个节点成功、返回同一个压缩公钥并各自落盘，然后停止进程。
+
+| 节点 | REST | MPC HTTP | 分片目录 |
+|---|---:|---:|---|
+| 1 | 8081 | 9081 | `data/node-1` |
+| 2 | 8082 | 9082 | `data/node-2` |
+| 3 | 8083 | 9083 | `data/node-3` |
+
+单节点可用 `go run . -config configs/node-1.json` 启动。配置中的相对数据目录以配置文件所在目录为基准。
+
+这套配置用于本机联调，监听地址限制在回环接口。MPC 消息使用本地 HTTP，分片以 CMP 二进制格式写入各节点的数据目录。只使用测试密钥。
 
 ## 本地运行
 
-使用 Go 1.24 或更新版本，在仓库根目录执行 `go run .`。默认监听 `127.0.0.1:8080`，可以通过 `MPC_NODE_HTTP_ADDR` 为每个实例配置监听地址。
+使用 Go 1.24 或更新版本。在仓库根目录执行 `go run .` 可单独运行健康检查，默认监听 `127.0.0.1:8080`，可通过 `MPC_NODE_HTTP_ADDR` 修改。
 
 ```sh
 curl http://127.0.0.1:8080/healthz
