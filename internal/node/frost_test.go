@@ -126,6 +126,38 @@ func TestGenerateFROSTKey(t *testing.T) {
 		}
 	}
 
+	presignSession := "frost_presign"
+	presignRouting := mpcRoutingID(presignSession)
+	presignPath := "/frost/keys/" + keyID + "/2/presiggen?mpc_routing_id=" + presignRouting
+	presign := func(n *node, path string) result {
+		r := httptest.NewRequest(http.MethodPost, path, nil).WithContext(ctx)
+		r.Header.Set("MPC-SessionID", presignSession)
+		r.Header.Set("MPC-RoutingID", presignRouting)
+		r.Header.Add("MPC-Players", "3")
+		r.Header.Add("MPC-Players", "1")
+		w := httptest.NewRecorder()
+		n.restHandler().ServeHTTP(w, r)
+		return result{w.Code, w.Body.String()}
+	}
+	for _, n := range []*node{nodes[0], nodes[2]} {
+		go func() { results <- presign(n, presignPath) }()
+	}
+	batch, otherBatch := <-results, <-results
+	var batchResponse struct{ IDs []string }
+	if batch.status != http.StatusOK || batch != otherBatch ||
+		json.Unmarshal([]byte(batch.body), &batchResponse) != nil ||
+		len(batchResponse.IDs) != 2 || batchResponse.IDs[0] == batchResponse.IDs[1] {
+		t.Fatalf("unexpected FROST presign replies: %v, %v", batch, otherBatch)
+	}
+	reopened := newNode(nodes[0].config)
+	reopened.keys = nodes[0].keys
+	if replay := presign(reopened, presignPath); replay != batch {
+		t.Fatalf("unexpected presign replay: %v", replay)
+	}
+	if conflict := presign(reopened, strings.Replace(presignPath, "/2/", "/1/", 1)); conflict.status != http.StatusConflict {
+		t.Fatalf("changed presign count status = %d, want 409", conflict.status)
+	}
+
 	const message = "FROST signing test"
 	sid := "frost_sign"
 	rid := mpcRoutingID(sid)

@@ -21,14 +21,19 @@ func (n *node) loadECDSAShare(ctx context.Context, keyID string, path []uint32) 
 	if err != nil {
 		return nil, err
 	}
+	return deriveECDSAShare(share, path)
+}
+
+func deriveECDSAShare(share *cmp.Config, path []uint32) (*cmp.Config, error) {
 	for _, index := range path {
 		if index >= 1<<31 {
 			return nil, errInvalidChainPath
 		}
-		share, err = share.DeriveBIP32(index)
+		child, err := share.DeriveBIP32(index)
 		if err != nil {
 			return nil, errInvalidChainPath
 		}
+		share = child
 	}
 	return share, nil
 }

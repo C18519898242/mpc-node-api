@@ -2,9 +2,54 @@ package keystore
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"reflect"
 	"testing"
 )
+
+func TestConsumeECDSAPresignOnce(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenNodeSQLite(t.TempDir(), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, _, err := store.ReserveECDSAPresign(ctx, "batch", "key", [32]byte{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveECDSAPresign(ctx, "batch", []Presignature{{ID: "first", Share: []byte{1}}, {ID: "second", Share: []byte{2}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ConsumeECDSAPresign(ctx, "other-key", "first"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("cross-key consumption: %v", err)
+	}
+	results := make(chan error, 8)
+	for range cap(results) {
+		go func() {
+			share, err := store.ConsumeECDSAPresign(ctx, "key", "first")
+			if err == nil && (share.ID != "first" || !reflect.DeepEqual(share.Share, []byte{1})) {
+				err = errors.New("unexpected consumed share")
+			}
+			results <- err
+		}()
+	}
+	successes := 0
+	for range cap(results) {
+		switch err := <-results; {
+		case err == nil:
+			successes++
+		case !errors.Is(err, sql.ErrNoRows):
+			t.Fatal(err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful consumptions = %d, want 1", successes)
+	}
+	if share, err := store.ConsumeECDSAPresign(ctx, "key", ""); err != nil || share.ID != "second" {
+		t.Fatalf("automatic selection failed: %v", err)
+	}
+}
 
 func TestSQLitePresignBatchIsAtomic(t *testing.T) {
 	ctx := context.Background()

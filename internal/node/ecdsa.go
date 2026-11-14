@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/taurusgroup/multi-party-sig/pkg/math/curve"
 )
 
 const ecdsaSessionPrefix = "ecdsa."
@@ -52,7 +53,11 @@ func (n *node) loadECDSAPublicKey(ctx context.Context, keyID string, path []uint
 	if err != nil {
 		return nil, err
 	}
-	compressed, err := share.PublicPoint().MarshalBinary()
+	return uncompressedECDSAPoint(share.PublicPoint())
+}
+
+func uncompressedECDSAPoint(public curve.Point) ([]byte, error) {
+	compressed, err := public.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}

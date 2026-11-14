@@ -61,9 +61,9 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func validPeerSessionID(id string) bool {
-	if strings.HasPrefix(id, ecdsaPresignPrefix) {
-		batchID, _, ok := splitPresignRoute(id)
-		return ok && memorySessionPattern.MatchString(strings.TrimPrefix(batchID, ecdsaPresignPrefix))
+	if strings.HasPrefix(id, ecdsaPresignPrefix) || strings.HasPrefix(id, frostPresignPrefix) {
+		_, _, ok := splitPresignRoute(id)
+		return ok
 	}
 	if sessionID, ok := strings.CutPrefix(id, frostSignPrefix); ok {
 		return memorySessionPattern.MatchString(sessionID)
@@ -81,12 +81,16 @@ func validPeerSessionID(id string) bool {
 }
 
 func splitPresignRoute(id string) (batchID string, slot int, ok bool) {
-	if !strings.HasPrefix(id, ecdsaPresignPrefix) {
+	prefix := ecdsaPresignPrefix
+	if strings.HasPrefix(id, frostPresignPrefix) {
+		prefix = frostPresignPrefix
+	}
+	if !strings.HasPrefix(id, prefix) {
 		return id, 0, false
 	}
-	batchID, rawSlot, ok := strings.Cut(id[len(ecdsaPresignPrefix):], ".")
+	batchID, rawSlot, ok := strings.Cut(id[len(prefix):], ".")
 	index, err := strconv.ParseUint(rawSlot, 10, 8)
-	return ecdsaPresignPrefix + batchID, int(index), ok && err == nil && index < maxPresignCount
+	return prefix + batchID, int(index), ok && err == nil && index < maxPresignCount && memorySessionPattern.MatchString(batchID)
 }
 
 func (n *node) sendMessage(ctx context.Context, id string, message *protocol.Message, participants party.IDSlice) error {

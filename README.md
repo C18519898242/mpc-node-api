@@ -52,7 +52,17 @@
 
 `messageHash` 是标准 Base64 编码的 32 字节摘要。可传非硬化 BIP32 路径使用派生密钥。每个参与节点返回 `{"signature":"..."}`，其中 `signature` 是完整的 DER ECDSA 签名，使用标准 Base64 编码，可直接验签。签名会话和结果保留在进程内存中。
 
-`POST /ecdsa/keys/{keyID}/{count}/presiggen?mpc_routing_id=<routingID>` 为根密钥批量预计算。向指定的 `MPC-Players` 并发发送空请求体，使用同一个新会话 ID。单批支持 1 至 8 份。节点将整批本地材料写入各自的 `node.sqlite` 后返回 `{"ids":["..."]}`。调用方应等全部参与节点成功并比对有序 ID 列表。已完成的同参数会话在重启后也返回原批次 ID。预签名材料用于本机联调，使用与密钥分片相同的存储保护。消费预签名的接口待实现。
+`POST /ecdsa/keys/{keyID}/{count}/presiggen?mpc_routing_id=<routingID>` 为根密钥批量预计算。向指定的 `MPC-Players` 并发发送空请求体，使用同一个新会话 ID。单批支持 1 至 8 份。节点将整批本地材料写入各自的 `node.sqlite` 后返回 `{"ids":["..."]}`。调用方应等全部参与节点成功并比对有序 ID 列表。已完成的同参数会话在重启后也返回原批次 ID，已消费的 ID 不会因此重新可用。预签名材料用于本机联调，使用与密钥分片相同的存储保护。
+
+`POST /ecdsa/keys/{keyID}/signwithpresig` 在单个节点消费预签名，无需 MPC 会话头。请求示例：
+
+```json
+{"chainPath":null,"messageHash":"IRNprmnFIL3etbcSMvcRoCCABjD63A1AAJYHEsj8OoA=","presignatureId":"<presiggen 返回的 ID>"}
+```
+
+向预计算组的每个节点发送相同的 ID、32 字节摘要和路径。支持根密钥和非硬化 BIP32 路径。空 ID 会在当前节点选择该密钥最早入库的可用记录，只应在首个节点使用，再把返回的 `presignatureId` 传给同组其余节点。响应使用 SDK 支持的结构化 `additive` 部分签名字段，包括 `presignatureId`、`curve`、`playerIndex`、`threshold`、`sharing`、`r`、`publicKey` 和 `sShare`。响应的 `threshold` 为预计算组人数减一，合成需要整组份额。客户端可通过 SDK 的 `SignWithPresignature` 解析响应，再调用 `ECDSAFinalizeSignature` 合成。
+
+每个节点提交 SQLite 删除事务后才返回份额。未知或已消费的 ID 返回 HTTP 404。如果部分节点超时或失败，弃用该 ID，换一个 ID 重试。恢复旧数据库备份前须清空可用预签名，防止已消费的材料重新出现。
 
 ## FROST-Ed25519 建钥接口
 
@@ -65,6 +75,8 @@
 `POST /frost/keys/{keyID}/sign?mpc_routing_id=<routingID>` 使用与 ECDSA 签名相同的会话头。向选定节点并发发送同一份请求，例如 `{"chainPath":[0,1],"message":"aGVsbG8="}`。`message` 是原始消息的标准 Base64 编码，示例签名的是 `hello`。每个参与节点返回 `{"signature":"..."}`，其中 `signature` 是 Base64 编码的完整 64 字节 Ed25519 签名，可用同一路径查询到的公钥和原始消息直接验签。
 
 普通 FROST 建钥记录使用根公钥确定初始 chain code，现有数据库记录可直接派生。非硬化派生规则由 `go.mod` 锁定的 FROST fork 提供。
+
+`POST /frost/keys/{keyID}/{count}/presiggen?mpc_routing_id=<routingID>` 使用和 ECDSA 批量预签名相同的会话头，向选定节点并发发送空请求体。单批支持 1 至 8 份。节点交换并核对公开承诺，将各自的一次性随机数和同组承诺写入 SQLite 的 `frost_presignatures`，再返回相同的有序 `{"ids":["..."]}`。批次记录保存在 `frost_presign_batches`。这些材料用于后续 FROST 在线消费，当前接口仅生成和保存。
 
 ## 节点数据库
 
