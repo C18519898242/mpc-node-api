@@ -100,7 +100,7 @@ func TestGenerateFROSTKey(t *testing.T) {
 		}{
 			{keyID, `{"chainPath":null}`, http.StatusOK},
 			{keyID, `{"chainPath":[]}`, http.StatusOK},
-			{keyID, `{"chainPath":[0]}`, http.StatusBadRequest},
+			{keyID, `{"chainPath":[2147483648]}`, http.StatusBadRequest},
 			{"unknown-key", `{"chainPath":null}`, http.StatusNotFound},
 		} {
 			request := httptest.NewRequest(http.MethodPost, "/frost/keys/"+tc.keyID+"/publickey",
@@ -155,7 +155,32 @@ func TestGenerateFROSTKey(t *testing.T) {
 		!ed25519.Verify(ed25519.PublicKey(publicKey), []byte(message), signature.Signature) {
 		t.Fatalf("invalid Ed25519 signature: %v", err)
 	}
-	if replay := sign(nodes[0], body, "1", "3"); replay != first {
+	publicRequest := httptest.NewRequest(http.MethodPost, "/frost/keys/"+keyID+"/publickey",
+		strings.NewReader(`{"chainPath":[0,1]}`))
+	publicResponse := httptest.NewRecorder()
+	nodes[1].restHandler().ServeHTTP(publicResponse, publicRequest)
+	var child struct{ PublicKey []byte }
+	if publicResponse.Code != http.StatusOK || json.Unmarshal(publicResponse.Body.Bytes(), &child) != nil ||
+		len(child.PublicKey) != ed25519.PublicKeySize || string(child.PublicKey) == publicKey {
+		t.Fatalf("unexpected derived public key response: %d", publicResponse.Code)
+	}
+	if conflict := sign(nodes[0], `{"chainPath":[0,1],"message":"RlJPU1Qgc2lnbmluZyB0ZXN0"}`, "1", "3"); conflict.status != http.StatusConflict {
+		t.Fatalf("changed path status = %d, want 409", conflict.status)
+	}
+	sid = "frost_child_sign"
+	rid = mpcRoutingID(sid)
+	signPath = "/frost/keys/" + keyID + "/sign?mpc_routing_id=" + rid
+	const childBody = `{"chainPath":[0,1],"message":"RlJPU1Qgc2lnbmluZyB0ZXN0"}`
+	for _, n := range []*node{nodes[0], nodes[2]} {
+		go func() { results <- sign(n, childBody, "1", "3") }()
+	}
+	first, second = <-results, <-results
+	if first.status != http.StatusOK || first != second || json.Unmarshal([]byte(first.body), &signature) != nil ||
+		!ed25519.Verify(ed25519.PublicKey(child.PublicKey), []byte(message), signature.Signature) ||
+		ed25519.Verify(ed25519.PublicKey(publicKey), []byte(message), signature.Signature) {
+		t.Fatalf("derived signing replies failed: %v, %v", first, second)
+	}
+	if replay := sign(nodes[0], childBody, "1", "3"); replay != first {
 		t.Fatalf("unexpected signing replay: %v", replay)
 	}
 	if conflict := sign(nodes[0], `{"message":"YQ=="}`, "1", "3"); conflict.status != http.StatusConflict {

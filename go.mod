@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.2.0
 	github.com/fxamacker/cbor/v2 v2.4.0
-	github.com/taurusgroup/frost-ed25519 v0.0.0-20261113144211-2c927d52326c
+	github.com/taurusgroup/frost-ed25519 v0.0.0-20261114073414-a5e5b68e2b45
 	github.com/taurusgroup/multi-party-sig v0.0.0-20261110150323-163e25a3a0a8
 	modernc.org/sqlite v1.38.2
 )
@@ -28,6 +28,6 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/taurusgroup/frost-ed25519 => github.com/C18519898242/frost-ed25519 v0.0.0-20261113144211-2c927d52326c
+replace github.com/taurusgroup/frost-ed25519 => github.com/C18519898242/frost-ed25519 v0.0.0-20261114073414-a5e5b68e2b45
 
 replace github.com/taurusgroup/multi-party-sig => github.com/C18519898242/multi-party-sig v0.0.0-20261110150323-163e25a3a0a8

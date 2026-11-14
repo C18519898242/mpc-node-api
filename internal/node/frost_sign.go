@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/taurusgroup/frost-ed25519/pkg/eddsa"
 	"github.com/taurusgroup/frost-ed25519/pkg/frost"
 	"github.com/taurusgroup/frost-ed25519/pkg/frost/keygen"
 	frostparty "github.com/taurusgroup/frost-ed25519/pkg/frost/party"
@@ -28,8 +29,8 @@ func (n *node) signFROST(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid FROST signing request", http.StatusBadRequest)
 		return
 	}
-	if len(request.ChainPath) != 0 {
-		http.Error(w, "FROST signing supports the root key only", http.StatusBadRequest)
+	if eddsa.ValidatePath(request.ChainPath) != nil {
+		http.Error(w, "invalid FROST derivation path", http.StatusBadRequest)
 		return
 	}
 	signers := n.signingPlayers(w, r, sessionID)
@@ -57,8 +58,15 @@ func (n *node) signFROST(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := frostSignPrefix + sessionID
-	n.serveSignature(w, r, id, keyID, signers, nil, request.Message, "FROST",
+	n.serveSignature(w, r, id, keyID, signers, request.ChainPath, request.Message, "FROST",
 		func(ctx context.Context, session *keygenSession) ([]byte, error) {
+			if len(request.ChainPath) != 0 {
+				secret, public, err := share.Public.DeriveShare(share.SecretKey, share.Public.GroupKey.DefaultChainCode(), request.ChainPath)
+				if err != nil {
+					return nil, err
+				}
+				share = &keygen.Output{SecretKey: secret, Public: public}
+			}
 			state, output, err := frost.NewSignState(selected, share.SecretKey, share.Public, request.Message, 0)
 			if err != nil {
 				return nil, err

@@ -1,7 +1,7 @@
 filippo.io/edwards25519 v1.0.0-rc.1 h1:m0VOOB23frXZvAOK44usCgLWvtsxIoMCTBGJZlpmGfU=
 filippo.io/edwards25519 v1.0.0-rc.1/go.mod h1:N1IkdkCkiLB6tki+MYJoSx2JTY9NUlxZE7eHn5EwJns=
-github.com/C18519898242/frost-ed25519 v0.0.0-20261113144211-2c927d52326c h1:6uU2Ohfw7vVXT2Hq+I0EYE1aqCxn/Y8dxpo3iVHFDHg=
-github.com/C18519898242/frost-ed25519 v0.0.0-20261113144211-2c927d52326c/go.mod h1:HvWEpeV7Nptyy1OAzxcb/DvYOhrFfzMUx0CFrzUgQbg=
+github.com/C18519898242/frost-ed25519 v0.0.0-20261114073414-a5e5b68e2b45 h1:aH9I59EzMz3vVnzueNKlvYeaD7pOkskMlP9Dp/JHb40=
+github.com/C18519898242/frost-ed25519 v0.0.0-20261114073414-a5e5b68e2b45/go.mod h1:HvWEpeV7Nptyy1OAzxcb/DvYOhrFfzMUx0CFrzUgQbg=
 github.com/C18519898242/multi-party-sig v0.0.0-20261110150323-163e25a3a0a8 h1:R7xqxBa45tJOSfYJBCnzxNmxccVKJcP+z7sLq5KsuLk=
 github.com/C18519898242/multi-party-sig v0.0.0-20261110150323-163e25a3a0a8/go.mod h1:roZI3gaKCo15PUSB4LdJpTLTjq8TFsJiOH5kpcN1HpQ=
 github.com/cronokirby/saferith v0.33.0 h1:TgoQlfsD4LIwx71+ChfRcIpjkw+RPOapDEVxa+LhwLo=

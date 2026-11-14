@@ -60,9 +60,11 @@
 
 节点把本地分片和 FROST 公共信息写入 SQLite 后返回成功。
 
-`POST /frost/keys/{keyID}/publickey` 可向任意持有分片的单个节点查询 Ed25519 根公钥，无需 MPC 会话头。请求体传 `{"chainPath":null}` 或 `{"chainPath":[]}`。响应的 `curve` 为 `ed25519`，`publicKey` 是标准 Base64 编码的 32 字节 Ed25519 公钥。非空派生路径返回 HTTP 400。
+`POST /frost/keys/{keyID}/publickey` 可向任意持有分片的单个节点查询 Ed25519 公钥，无需 MPC 会话头。请求体传 `{"chainPath":null}` 或 `{"chainPath":[]}` 查询根公钥，传 `{"chainPath":[0,1]}` 查询子公钥。响应的 `curve` 为 `ed25519`，`publicKey` 是标准 Base64 编码的 32 字节 Ed25519 公钥。索引范围为 0 至 2147483647，硬化索引返回 HTTP 400。
 
-`POST /frost/keys/{keyID}/sign?mpc_routing_id=<routingID>` 使用与 ECDSA 签名相同的会话头。向选定节点并发发送同一份请求，例如 `{"chainPath":null,"message":"aGVsbG8="}`。`message` 是原始消息的标准 Base64 编码，示例签名的是 `hello`。FROST 使用根密钥，非空派生路径返回 HTTP 400。每个参与节点返回 `{"signature":"..."}`，其中 `signature` 是 Base64 编码的完整 64 字节 Ed25519 签名，可用查询到的公钥和原始消息直接验签。
+`POST /frost/keys/{keyID}/sign?mpc_routing_id=<routingID>` 使用与 ECDSA 签名相同的会话头。向选定节点并发发送同一份请求，例如 `{"chainPath":[0,1],"message":"aGVsbG8="}`。`message` 是原始消息的标准 Base64 编码，示例签名的是 `hello`。每个参与节点返回 `{"signature":"..."}`，其中 `signature` 是 Base64 编码的完整 64 字节 Ed25519 签名，可用同一路径查询到的公钥和原始消息直接验签。
+
+普通 FROST 建钥记录使用根公钥确定初始 chain code，现有数据库记录可直接派生。非硬化派生规则由 `go.mod` 锁定的 FROST fork 提供。
 
 ## 节点数据库
 

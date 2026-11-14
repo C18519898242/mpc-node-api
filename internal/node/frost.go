@@ -32,12 +32,12 @@ func (n *node) frostPublicKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid public key request", http.StatusBadRequest)
 		return
 	}
-	if len(request.ChainPath) != 0 {
-		http.Error(w, "FROST public key lookup supports the root key only", http.StatusBadRequest)
+	if eddsa.ValidatePath(request.ChainPath) != nil {
+		http.Error(w, "invalid FROST derivation path", http.StatusBadRequest)
 		return
 	}
 
-	point, err := n.loadFROSTPublicKey(r.Context(), keyID)
+	point, err := n.loadFROSTPublicKey(r.Context(), keyID, request.ChainPath)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		http.NotFound(w, r)
@@ -52,7 +52,7 @@ func (n *node) frostPublicKey(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (n *node) loadFROSTPublicKey(ctx context.Context, keyID string) ([]byte, error) {
+func (n *node) loadFROSTPublicKey(ctx context.Context, keyID string, path []uint32) ([]byte, error) {
 	data, err := n.keys.Load(ctx, "frost", keyID)
 	if err != nil {
 		return nil, err
@@ -70,6 +70,14 @@ func (n *node) loadFROSTPublicKey(ctx context.Context, keyID string) ([]byte, er
 	}
 	if share.Public.GroupKey == nil {
 		return nil, errors.New("stored FROST share is missing its group key")
+	}
+	if len(path) != 0 {
+		root := share.Public.GroupKey
+		child, _, err := root.Derive(root.DefaultChainCode(), path)
+		if err != nil {
+			return nil, err
+		}
+		return child.ToEd25519(), nil
 	}
 	return share.Public.GroupKey.ToEd25519(), nil
 }
