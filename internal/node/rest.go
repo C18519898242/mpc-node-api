@@ -34,6 +34,7 @@ func (n *node) restHandler() http.Handler {
 	mux.HandleFunc("POST /frost/keys/{keyID}/{count}/presiggen", n.logRequest("presiggen", "frost", n.generateFROSTPresign))
 	mux.HandleFunc("POST /frost/keys/{keyID}/signwithpresig", n.logRequest("signwithpresig", "frost", n.signWithFROSTPresign))
 	mux.HandleFunc("POST /key/{keyID}/count/presigs", n.logRequest("countpresigs", "key", n.countPresign))
+	mux.HandleFunc("DELETE /key/{keyID}/presigs", n.logRequest("deletepresigs", "key", n.deletePresign))
 	mux.HandleFunc("POST /v1/keygen", n.logRequest("keygen", "ecdsa", n.startKeygen))
 	mux.HandleFunc("GET /v1/sessions/{sessionId}", n.getKeygen)
 	return mux

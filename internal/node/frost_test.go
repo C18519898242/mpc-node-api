@@ -132,7 +132,7 @@ func TestGenerateFROSTKey(t *testing.T) {
 
 	presignSession := "frost_presign"
 	presignRouting := mpcRoutingID(presignSession)
-	presignPath := "/frost/keys/" + keyID + "/2/presiggen?mpc_routing_id=" + presignRouting
+	presignPath := "/frost/keys/" + keyID + "/3/presiggen?mpc_routing_id=" + presignRouting
 	presign := func(n *node, path string) result {
 		r := httptest.NewRequest(http.MethodPost, path, nil).WithContext(ctx)
 		r.Header.Set("MPC-SessionID", presignSession)
@@ -150,7 +150,7 @@ func TestGenerateFROSTKey(t *testing.T) {
 	var batchResponse struct{ IDs []string }
 	if batch.status != http.StatusOK || batch != otherBatch ||
 		json.Unmarshal([]byte(batch.body), &batchResponse) != nil ||
-		len(batchResponse.IDs) != 2 || batchResponse.IDs[0] == batchResponse.IDs[1] {
+		len(batchResponse.IDs) != 3 || batchResponse.IDs[0] == batchResponse.IDs[1] {
 		t.Fatalf("unexpected FROST presign replies: %v, %v", batch, otherBatch)
 	}
 	reopened := newNode(nodes[0].config)
@@ -158,7 +158,7 @@ func TestGenerateFROSTKey(t *testing.T) {
 	if replay := presign(reopened, presignPath); replay != batch {
 		t.Fatalf("unexpected presign replay: %v", replay)
 	}
-	if conflict := presign(reopened, strings.Replace(presignPath, "/2/", "/1/", 1)); conflict.status != http.StatusConflict {
+	if conflict := presign(reopened, strings.Replace(presignPath, "/3/", "/1/", 1)); conflict.status != http.StatusConflict {
 		t.Fatalf("changed presign count status = %d, want 409", conflict.status)
 	}
 	countPresigs := func(n *node, keyID, body string) result {
@@ -174,9 +174,9 @@ func TestGenerateFROSTKey(t *testing.T) {
 		code  int
 		want  string
 	}{
-		{nodes[0], keyID, `{}`, http.StatusOK, "2"},
+		{nodes[0], keyID, `{}`, http.StatusOK, "3"},
 		{nodes[1], keyID, `{}`, http.StatusOK, "0"},
-		{nodes[2], keyID, `{}`, http.StatusOK, "2"},
+		{nodes[2], keyID, `{}`, http.StatusOK, "3"},
 		{nodes[0], "unknown-key", `{}`, http.StatusNotFound, ""},
 		{nodes[0], "bad!", `{}`, http.StatusBadRequest, ""},
 		{nodes[0], keyID, ``, http.StatusBadRequest, ""},
@@ -316,10 +316,36 @@ func TestGenerateFROSTKey(t *testing.T) {
 			if replay := consume(n, id, tc.path, tc.message); replay.status != http.StatusNotFound {
 				t.Fatalf("consumed presignature status = %d, want 404", replay.status)
 			}
-			if got := countPresigs(n, keyID, `{}`); got.status != http.StatusOK || got.body != string(rune('1'-i)) {
-				t.Fatalf("remaining presignature count = %v, want %d", got, 1-i)
+			if got := countPresigs(n, keyID, `{}`); got.status != http.StatusOK || got.body != string(rune('2'-i)) {
+				t.Fatalf("remaining presignature count = %v, want %d", got, 2-i)
 			}
 		}
+	}
+	deletePresigs := func(n *node, keyID, body string) int {
+		r := httptest.NewRequest(http.MethodDelete, "/key/"+keyID+"/presigs", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		n.restHandler().ServeHTTP(w, r)
+		return w.Code
+	}
+	for _, tc := range []struct {
+		node  *node
+		keyID string
+		body  string
+		code  int
+	}{
+		{nodes[0], "unknown-key", "", http.StatusNotFound},
+		{nodes[0], "bad!", "", http.StatusBadRequest},
+		{nodes[0], keyID, "{}", http.StatusBadRequest},
+		{nodes[1], keyID, "", http.StatusNoContent},
+		{reopened, keyID, "", http.StatusNoContent},
+		{nodes[2], keyID, "", http.StatusNoContent},
+	} {
+		if code := deletePresigs(tc.node, tc.keyID, tc.body); code != tc.code {
+			t.Fatalf("deletePresigs(%q, %q) = %d, want %d", tc.keyID, tc.body, code, tc.code)
+		}
+	}
+	if got := countPresigs(reopened, keyID, `{}`); got.status != http.StatusOK || got.body != "0" {
+		t.Fatalf("count after delete = %v, want 0", got)
 	}
 	nodes[0].client.Transport = localPeerTransport(transport)
 	nodes[2].client.Transport = localPeerTransport(transport)

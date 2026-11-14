@@ -66,6 +66,8 @@
 
 `POST /key/{keyID}/count/presigs` 查询当前节点上该密钥可用的预签名数量，无需 MPC 会话头。请求体为 `{}`，成功响应为单个 JSON 整数（例如 `2`），未知密钥返回 HTTP 404。
 
+`DELETE /key/{keyID}/presigs` 清空当前节点上该密钥的所有可用预签名，无请求体、无需 MPC 会话头。成功返回 HTTP 204，未知密钥返回 HTTP 404。若需清理整组节点，需分别向各节点发起请求。
+
 ## FROST-Ed25519 建钥接口
 
 `POST /frost/keys?mpc_routing_id=<routingID>` 沿用上面的会话头、路由 ID 算法和同步响应格式。对三个节点并发发送同一份请求，例如 `{"threshold":1,"curve":"ed25519","keyID":""}`。支持安全阈值 `1`（2-of-3）和 `2`（3-of-3），建钥均由三个节点参与。

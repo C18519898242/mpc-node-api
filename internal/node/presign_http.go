@@ -44,6 +44,27 @@ func (n *node) countPresign(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (n *node) deletePresign(w http.ResponseWriter, r *http.Request) {
+	keyID := r.PathValue("keyID")
+	var body [1]byte
+	if !keyIDPattern.MatchString(keyID) {
+		http.Error(w, "invalid key ID", http.StatusBadRequest)
+		return
+	}
+	if read, err := io.ReadFull(r.Body, body[:]); read != 0 || err != io.EOF {
+		http.Error(w, "presign delete request body must be empty", http.StatusBadRequest)
+		return
+	}
+	switch err := n.keys.DeletePresign(r.Context(), keyID); {
+	case errors.Is(err, sql.ErrNoRows):
+		http.NotFound(w, r)
+	case err != nil:
+		http.Error(w, "could not delete presignatures", http.StatusInternalServerError)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 func (n *node) generatePresign(w http.ResponseWriter, r *http.Request, algorithm, prefix string, prepare preparePresign) {
 	sessionID := r.Header.Get("MPC-SessionID")
 	keyID := r.PathValue("keyID")
