@@ -17,6 +17,7 @@ import (
 	"github.com/taurusgroup/frost-ed25519/pkg/frost/keygen"
 	frostparty "github.com/taurusgroup/frost-ed25519/pkg/frost/party"
 	"github.com/taurusgroup/frost-ed25519/pkg/messages"
+	froststate "github.com/taurusgroup/frost-ed25519/pkg/state"
 	"github.com/taurusgroup/multi-party-sig/pkg/party"
 	"github.com/taurusgroup/multi-party-sig/pkg/protocol"
 )
@@ -87,7 +88,7 @@ func (n *node) generateFROSTShare(ctx context.Context, id string, session *keyge
 	return json.Marshal(share)
 }
 
-func (n *node) executeFROSTKeygen(ctx context.Context, id string, session *keygenSession) (*keygen.Output, error) {
+func (n *node) frostRoster() ([]party.ID, map[party.ID]frostparty.ID, frostparty.IDSlice) {
 	roster := []party.ID{n.config.PartyID}
 	for peer := range n.config.Peers {
 		roster = append(roster, peer)
@@ -100,13 +101,24 @@ func (n *node) executeFROSTKeygen(ctx context.Context, id string, session *keyge
 		frostIDs[i] = frostparty.ID(i + 1)
 		ids[peer] = frostIDs[i]
 	}
-	self := ids[n.config.PartyID]
+	return roster, ids, frostIDs
+}
+
+func (n *node) executeFROSTKeygen(ctx context.Context, id string, session *keygenSession) (*keygen.Output, error) {
+	roster, ids, frostIDs := n.frostRoster()
 	// The library's DKG messages do not contain a session ID.
 	binding := sha256.Sum256(fmt.Appendf(nil, "%s:%s:%d:%q", id, session.key.KeyID, session.key.Threshold, roster))
-	state, output, err := frost.NewKeygenState(self, frostIDs, frostparty.Size(session.key.Threshold), 0)
+	state, output, err := frost.NewKeygenState(ids[n.config.PartyID], frostIDs, frostparty.Size(session.key.Threshold), 0)
 	if err != nil {
 		return nil, err
 	}
+	if err := n.runFROST(ctx, id, session, binding, state, roster, ids, nil, false); err != nil {
+		return nil, err
+	}
+	return output, nil
+}
+
+func (n *node) runFROST(ctx context.Context, id string, session *keygenSession, binding [32]byte, state *froststate.State, roster []party.ID, ids map[party.ID]frostparty.ID, signers party.IDSlice, signing bool) error {
 	type messageKey struct {
 		from frostparty.ID
 		kind messages.MessageType
@@ -117,14 +129,14 @@ func (n *node) executeFROSTKeygen(ctx context.Context, id string, session *keyge
 		for _, message := range outgoing {
 			payload, err := message.MarshalBinary()
 			if err != nil {
-				return nil, err
+				return err
 			}
 			envelope := &protocol.Message{SSID: binding[:], From: n.config.PartyID, Data: payload}
 			if !message.IsBroadcast() {
 				envelope.To = roster[int(message.To)-1]
 			}
-			if err := n.sendMessage(ctx, id, envelope, nil); err != nil {
-				return nil, err
+			if err := n.sendMessage(ctx, id, envelope, signers); err != nil {
+				return err
 			}
 		}
 		if len(outgoing) > 0 {
@@ -133,46 +145,55 @@ func (n *node) executeFROSTKeygen(ctx context.Context, id string, session *keyge
 		}
 		select {
 		case <-state.Done():
-			if err := state.Err(); err != nil {
-				return nil, err
-			}
-			return output, nil
+			return state.Err()
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		case envelope := <-session.incoming:
 			if !bytes.Equal(envelope.SSID, binding[:]) {
-				return nil, fmt.Errorf("FROST session parameters disagree")
+				return fmt.Errorf("FROST session parameters disagree")
 			}
-			message, err := decodeFROSTKeygenMessage(envelope.Data)
+			message, err := decodeFROSTMessage(envelope.Data, signing)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if ids[envelope.From] != message.From || ids[envelope.To] != message.To {
-				return nil, fmt.Errorf("FROST message identity does not match envelope")
+				return fmt.Errorf("FROST message identity does not match envelope")
 			}
 			key := messageKey{message.From, message.Type}
 			digest := sha256.Sum256(envelope.Data)
 			if previous, exists := seen[key]; exists {
 				if previous != digest {
-					return nil, fmt.Errorf("conflicting FROST message")
+					return fmt.Errorf("conflicting FROST message")
 				}
 				continue
 			}
 			seen[key] = digest
 			if err := state.HandleMessage(message); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
 }
 
-func decodeFROSTKeygenMessage(payload []byte) (*messages.Message, error) {
+func decodeFROSTMessage(payload []byte, signing bool) (*messages.Message, error) {
 	// The library's Message.UnmarshalBinary can return nil for invalid bodies.
 	var message messages.Message
 	if err := message.Header.UnmarshalBinary(payload); err != nil {
 		return nil, err
 	}
 	body := payload[message.Header.Size():]
+	if signing {
+		switch message.Type {
+		case messages.MessageTypeSign1:
+			message.Sign1 = new(messages.Sign1)
+			return &message, message.Sign1.UnmarshalBinary(body)
+		case messages.MessageTypeSign2:
+			message.Sign2 = new(messages.Sign2)
+			return &message, message.Sign2.UnmarshalBinary(body)
+		default:
+			return nil, fmt.Errorf("unexpected FROST signing message type %d", message.Type)
+		}
+	}
 	switch message.Type {
 	case messages.MessageTypeKeyGen1:
 		message.KeyGen1 = new(messages.KeyGen1)

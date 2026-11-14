@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -123,6 +124,42 @@ func TestGenerateFROSTKey(t *testing.T) {
 				}
 			}
 		}
+	}
+
+	const message = "FROST signing test"
+	sid := "frost_sign"
+	rid := mpcRoutingID(sid)
+	signPath := "/frost/keys/" + keyID + "/sign?mpc_routing_id=" + rid
+	sign := func(n *node, body string, players ...string) result {
+		r := httptest.NewRequest(http.MethodPost, signPath, strings.NewReader(body)).WithContext(ctx)
+		r.Header.Set("MPC-SessionID", sid)
+		r.Header.Set("MPC-RoutingID", rid)
+		for _, player := range players {
+			r.Header.Add("MPC-Players", player)
+		}
+		w := httptest.NewRecorder()
+		n.restHandler().ServeHTTP(w, r)
+		return result{w.Code, w.Body.String()}
+	}
+	const body = `{"chainPath":null,"message":"RlJPU1Qgc2lnbmluZyB0ZXN0"}`
+	for _, n := range []*node{nodes[0], nodes[2]} {
+		go func() { results <- sign(n, body, "3", "1") }()
+	}
+	first := <-results
+	second := <-results
+	if first.status != http.StatusOK || first != second {
+		t.Fatalf("signing replies differ or failed: %v, %v", first, second)
+	}
+	var signature struct{ Signature []byte }
+	if err := json.Unmarshal([]byte(first.body), &signature); err != nil ||
+		!ed25519.Verify(ed25519.PublicKey(publicKey), []byte(message), signature.Signature) {
+		t.Fatalf("invalid Ed25519 signature: %v", err)
+	}
+	if replay := sign(nodes[0], body, "1", "3"); replay != first {
+		t.Fatalf("unexpected signing replay: %v", replay)
+	}
+	if conflict := sign(nodes[0], `{"message":"YQ=="}`, "1", "3"); conflict.status != http.StatusConflict {
+		t.Fatalf("changed message status = %d, want 409", conflict.status)
 	}
 }
 
