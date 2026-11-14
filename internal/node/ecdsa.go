@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -36,7 +35,6 @@ func (n *node) ecdsaPublicKey(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errInvalidChainPath):
 		http.Error(w, "invalid BIP32 derivation path", http.StatusBadRequest)
 	case err != nil:
-		log.Printf("node %s: ECDSA public key lookup for %s: %v", n.config.PartyID, keyID, err)
 		http.Error(w, "could not read ECDSA public key", http.StatusInternalServerError)
 	default:
 		w.Header().Set("Content-Type", "application/json")

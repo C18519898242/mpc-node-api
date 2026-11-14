@@ -7,9 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
-	"log"
 	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/C18519898242/mpc-node-api/internal/keystore"
 	"github.com/taurusgroup/multi-party-sig/pkg/party"
@@ -65,7 +65,6 @@ func (n *node) generateKey(w http.ResponseWriter, r *http.Request, prefix, curve
 	}
 	session, err := n.beginStoredKeygen(r.Context(), prefix+sessionID, key, generate)
 	if err != nil {
-		log.Printf("node %s: reserve keygen %s: %v", n.config.PartyID, sessionID, err)
 		http.Error(w, "could not reserve keygen", http.StatusInternalServerError)
 		return
 	}
@@ -138,18 +137,21 @@ func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Ke
 }
 
 func (n *node) runStoredKeygen(id string, session *keygenSession, generate generateShare) {
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), keygenTimeout)
 	defer cancel()
 	share, err := generate(ctx, id, session)
 	defer clear(share)
+	stage := "protocol"
 	if err == nil {
+		stage = "storage"
 		err = n.keys.Save(ctx, session.key, share)
 	}
+	n.logMPCResult("keygen", session.key.Algorithm, stage, start, err)
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	defer close(session.done)
 	if err != nil {
-		log.Printf("node %s: keygen %s failed: %v", n.config.PartyID, id, err)
 		session.status.State = "failed"
 		return
 	}

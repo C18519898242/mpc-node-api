@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"time"
 
@@ -72,18 +71,21 @@ func (n *node) lookupKeygen(id string) (keygenStatus, error) {
 }
 
 func (n *node) runKeygen(id string, session *keygenSession) {
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), keygenTimeout)
 	defer cancel()
 
 	share, err := n.executeKeygen(ctx, id, []byte(id), 2, session.incoming)
 	var status keygenStatus
+	stage := "protocol"
 	if err == nil {
+		stage = "storage"
 		status, err = n.saveShare(id, share)
 	}
+	n.logMPCResult("keygen", "ecdsa", stage, start, err)
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err != nil {
-		log.Printf("node %s: keygen %s failed: %v", n.config.PartyID, id, err)
 		session.status.State = "failed"
 		return
 	}

@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"slices"
 
@@ -45,7 +44,6 @@ func (n *node) signFROST(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	case err != nil:
-		log.Printf("node %s: FROST signing key lookup for %s: %v", n.config.PartyID, keyID, err)
 		http.Error(w, "could not load signing key", http.StatusInternalServerError)
 		return
 	}

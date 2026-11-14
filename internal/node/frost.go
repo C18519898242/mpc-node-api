@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"slices"
 
@@ -43,7 +42,6 @@ func (n *node) frostPublicKey(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, sql.ErrNoRows):
 		http.NotFound(w, r)
 	case err != nil:
-		log.Printf("node %s: FROST public key lookup for %s: %v", n.config.PartyID, keyID, err)
 		http.Error(w, "could not read FROST public key", http.StatusInternalServerError)
 	default:
 		w.Header().Set("Content-Type", "application/json")

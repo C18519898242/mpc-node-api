@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ type shareStore interface {
 
 type node struct {
 	config   config.Config
+	logger   *slog.Logger
 	client   *http.Client
 	mu       sync.Mutex
 	sessions map[string]*keygenSession
@@ -27,6 +29,7 @@ type node struct {
 func newNode(cfg config.Config) *node {
 	return &node{
 		config:   cfg,
+		logger:   slog.Default(),
 		client:   &http.Client{Timeout: 2 * time.Second},
 		sessions: make(map[string]*keygenSession),
 	}

@@ -2,6 +2,7 @@ package node
 
 import (
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -12,7 +13,7 @@ import (
 
 // ServeHealth runs the health-only HTTP server.
 func ServeHealth(addr string) error {
-	log.Printf("mpc-node-api listening on %s", addr)
+	slog.Info("health server starting")
 	return httpServer(addr, healthMux()).ListenAndServe()
 }
 
@@ -24,6 +25,7 @@ func httpServer(addr string, handler http.Handler) *http.Server {
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       30 * time.Second,
+		ErrorLog:          log.New(httpErrorLog{}, "", 0),
 	}
 }
 
@@ -32,17 +34,20 @@ func Serve(cfg config.Config) error {
 	n := newNode(cfg)
 	keys, err := keystore.OpenNodeSQLite(cfg.DataDir, string(cfg.PartyID))
 	if err != nil {
+		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "storage")
 		return err
 	}
 	defer keys.Close()
 	n.keys = keys
 	rest, err := net.Listen("tcp", n.config.RESTAddr)
 	if err != nil {
+		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "rest_listener")
 		return err
 	}
 	defer rest.Close()
 	mpc, err := net.Listen("tcp", n.config.MPCAddr)
 	if err != nil {
+		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "mpc_listener")
 		return err
 	}
 	defer mpc.Close()
@@ -52,6 +57,7 @@ func Serve(cfg config.Config) error {
 	restServer.WriteTimeout = keygenTimeout + restServer.ReadTimeout + 5*time.Second
 	go func() { serveErrors <- restServer.Serve(rest) }()
 	go func() { serveErrors <- httpServer(n.config.MPCAddr, n.peerHandler()).Serve(mpc) }()
-	log.Printf("node %s listening on REST %s and MPC %s", n.config.PartyID, rest.Addr(), mpc.Addr())
+	n.logger.Info("node listening", "node_id", string(cfg.PartyID), "rest_port", rest.Addr().(*net.TCPAddr).Port,
+		"mpc_port", mpc.Addr().(*net.TCPAddr).Port)
 	return <-serveErrors
 }

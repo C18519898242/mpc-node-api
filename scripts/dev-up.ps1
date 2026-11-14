@@ -47,9 +47,9 @@ try {
         $deadline = [DateTime]::UtcNow.AddMinutes(3.2)
         do {
             $results = @($urls | ForEach-Object { Invoke-RestMethod "$_/v1/sessions/$sessionId" -TimeoutSec 5 })
-            if ($results.state -contains 'failed') { throw "Keygen failed for session $sessionId." }
+            if ($results.state -contains 'failed') { throw 'Keygen failed.' }
             if (@($results | Where-Object { $_.state -eq 'succeeded' }).Count -eq 3) { break }
-            if ([DateTime]::UtcNow -ge $deadline) { throw "Keygen timed out for session $sessionId." }
+            if ([DateTime]::UtcNow -ge $deadline) { throw 'Keygen timed out.' }
             Start-Sleep -Milliseconds 300
         } while ($true)
         $publicKeys = @($results.publicKey | Sort-Object -Unique)
@@ -66,9 +66,7 @@ try {
         if (@($shareFiles.FullName | Sort-Object -Unique).Count -ne 3 -or ($shareFiles.Length -contains 0)) {
             throw 'Expected three independent, nonempty share files.'
         }
-        Write-Host "CMP 3-of-3 keygen passed. Session: $sessionId"
-        Write-Host "Public key: $($publicKeys[0])"
-        $shareFiles | ForEach-Object { Write-Host $_.FullName }
+        Write-Host 'CMP 3-of-3 keygen passed. Public keys match and all three share files exist.'
     } else {
         Write-Host 'Press Ctrl+C to stop all nodes.'
         while ($processes.HasExited -notcontains $true) { Start-Sleep -Milliseconds 500 }

@@ -2,7 +2,7 @@ package main
 
 import (
 	"flag"
-	"log"
+	"log/slog"
 	"os"
 
 	"github.com/C18519898242/mpc-node-api/internal/config"
@@ -10,14 +10,20 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	configPath := flag.String("config", "", "path to a local MPC node JSON config")
 	flag.Parse()
 	if *configPath != "" {
 		cfg, err := config.Load(*configPath)
 		if err != nil {
-			log.Fatal(err)
+			slog.Error("startup failed", "stage", "config")
+			os.Exit(1)
 		}
-		log.Fatal(node.Serve(cfg))
+		if err := node.Serve(cfg); err != nil {
+			slog.Error("node stopped", "node_id", string(cfg.PartyID), "result", "failed")
+			os.Exit(1)
+		}
+		return
 	}
 
 	addr := os.Getenv("MPC_NODE_HTTP_ADDR")
@@ -25,5 +31,8 @@ func main() {
 		addr = "127.0.0.1:8080"
 	}
 
-	log.Fatal(node.ServeHealth(addr))
+	if err := node.ServeHealth(addr); err != nil {
+		slog.Error("health server stopped", "result", "failed")
+		os.Exit(1)
+	}
 }

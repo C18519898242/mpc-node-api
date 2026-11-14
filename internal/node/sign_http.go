@@ -4,9 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"log"
 	"net/http"
 	"slices"
+	"strings"
+	"time"
 
 	"github.com/taurusgroup/multi-party-sig/pkg/party"
 	"github.com/taurusgroup/multi-party-sig/pkg/protocol"
@@ -92,14 +93,16 @@ func (n *node) beginSign(id string, binding [32]byte, run signOperation) *keygen
 }
 
 func (n *node) runSign(id string, session *keygenSession, run signOperation) {
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), keygenTimeout)
 	defer cancel()
 	signature, err := run(ctx, session)
+	algorithm, _, _ := strings.Cut(id, "-sign.")
+	n.logMPCResult("sign", algorithm, "protocol", start, err)
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	defer close(session.done)
 	if err != nil {
-		log.Printf("node %s: sign %s failed: %v", n.config.PartyID, id, err)
 		session.status.State = "failed"
 		return
 	}

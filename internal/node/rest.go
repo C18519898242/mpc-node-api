@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -24,13 +23,13 @@ func healthMux() *http.ServeMux {
 
 func (n *node) restHandler() http.Handler {
 	mux := healthMux()
-	mux.HandleFunc("POST /ecdsa/keys", n.generateECDSAKey)
-	mux.HandleFunc("POST /ecdsa/keys/{keyID}/publickey", n.ecdsaPublicKey)
-	mux.HandleFunc("POST /ecdsa/keys/{keyID}/sign", n.signECDSA)
-	mux.HandleFunc("POST /frost/keys", n.generateFROSTKey)
-	mux.HandleFunc("POST /frost/keys/{keyID}/publickey", n.frostPublicKey)
-	mux.HandleFunc("POST /frost/keys/{keyID}/sign", n.signFROST)
-	mux.HandleFunc("POST /v1/keygen", n.startKeygen)
+	mux.HandleFunc("POST /ecdsa/keys", n.logRequest("keygen", "ecdsa", n.generateECDSAKey))
+	mux.HandleFunc("POST /ecdsa/keys/{keyID}/publickey", n.logRequest("publickey", "ecdsa", n.ecdsaPublicKey))
+	mux.HandleFunc("POST /ecdsa/keys/{keyID}/sign", n.logRequest("sign", "ecdsa", n.signECDSA))
+	mux.HandleFunc("POST /frost/keys", n.logRequest("keygen", "frost", n.generateFROSTKey))
+	mux.HandleFunc("POST /frost/keys/{keyID}/publickey", n.logRequest("publickey", "frost", n.frostPublicKey))
+	mux.HandleFunc("POST /frost/keys/{keyID}/sign", n.logRequest("sign", "frost", n.signFROST))
+	mux.HandleFunc("POST /v1/keygen", n.logRequest("keygen", "ecdsa", n.startKeygen))
 	mux.HandleFunc("GET /v1/sessions/{sessionId}", n.getKeygen)
 	return mux
 }
@@ -47,10 +46,8 @@ func (n *node) startKeygen(w http.ResponseWriter, r *http.Request) {
 	status, started, err := n.beginKeygen(request.SessionID)
 	switch {
 	case errors.Is(err, errRecordKeygenAttempt):
-		log.Printf("node %s: %v", n.config.PartyID, err)
 		http.Error(w, "could not record keygen attempt", http.StatusInternalServerError)
 	case err != nil:
-		log.Printf("node %s: read keygen result: %v", n.config.PartyID, err)
 		http.Error(w, "could not read keygen result", http.StatusInternalServerError)
 	case started:
 		writeStatus(w, http.StatusAccepted, status)
