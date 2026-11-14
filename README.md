@@ -76,7 +76,19 @@
 
 普通 FROST 建钥记录使用根公钥确定初始 chain code，现有数据库记录可直接派生。非硬化派生规则由 `go.mod` 锁定的 FROST fork 提供。
 
-`POST /frost/keys/{keyID}/{count}/presiggen?mpc_routing_id=<routingID>` 使用和 ECDSA 批量预签名相同的会话头，向选定节点并发发送空请求体。单批支持 1 至 8 份。节点交换并核对公开承诺，将各自的一次性随机数和同组承诺写入 SQLite 的 `frost_presignatures`，再返回相同的有序 `{"ids":["..."]}`。批次记录保存在 `frost_presign_batches`。这些材料用于后续 FROST 在线消费，当前接口仅生成和保存。
+`POST /frost/keys/{keyID}/{count}/presiggen?mpc_routing_id=<routingID>` 使用和 ECDSA 批量预签名相同的会话头，向选定节点并发发送空请求体。单批支持 1 至 8 份。节点交换并核对公开承诺，将各自的一次性随机数和同组承诺写入 SQLite 的 `frost_presignatures`，再返回相同的有序 `{"ids":["..."]}`。批次记录保存在 `frost_presign_batches`。
+
+`POST /frost/keys/{keyID}/signwithpresig` 在单个节点消费预签名，无需 MPC 会话头或节点间通信。
+
+```json
+{"chainPath":[0,1],"message":"aGVsbG8=","presignatureId":"<presiggen 返回的 ID>"}
+```
+
+`message` 是原始消息的标准 Base64 编码。`chainPath` 支持非硬化路径，传 `null` 或 `[]` 使用根密钥。向预计算组的每个节点发送相同的 ID、消息和路径。也可只在首个节点传空 ID，由该节点选择该密钥最早入库的可用记录，然后把响应中的 ID 传给同组其余节点。
+
+响应返回 `sharing: "additive"` 的结构化份额，包含 `presignatureId`、`schnorr_variant`（`Ed25519`）、`curve`（`ed25519`）、`playerIndex`、`threshold`、`r`、`publicKey`、`challenge` 和 `sShare`。响应的 `threshold` 等于预计算组人数减一。合并时确认份额来自预计算组的每个节点，且 ID、`r`、`challenge` 和公钥一致。把整组 `sShare` 按大端标量解码并相加（模 Ed25519 群阶），将 32 字节小端的和拼接在 32 字节的 `r` 后面，得到标准 Ed25519 签名。使用同一路径的公钥和原始消息验签。响应字段兼容 Blockdaemon Go SDK v73.5.2 的 Schnorr 份额解析及 `SchnorrFinalizeSignature`。SDK 默认请求 `/schnorr/`，接入本服务时需要映射到 `/frost/`。
+
+节点提交 SQLite 删除事务后才返回份额。未知或已消费的 ID 返回 HTTP 404。如果部分节点超时或失败，弃用该 ID，换一个 ID 重试。恢复旧数据库备份前须清空可用预签名，防止已消费的材料重新出现。
 
 ## 节点数据库
 

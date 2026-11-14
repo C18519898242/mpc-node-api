@@ -1,11 +1,14 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +16,7 @@ import (
 	"github.com/C18519898242/mpc-node-api/internal/config"
 	"github.com/C18519898242/mpc-node-api/internal/keystore"
 	"github.com/taurusgroup/frost-ed25519/pkg/frost/keygen"
+	"github.com/taurusgroup/frost-ed25519/pkg/ristretto"
 	"github.com/taurusgroup/multi-party-sig/pkg/party"
 )
 
@@ -195,6 +199,105 @@ func TestGenerateFROSTKey(t *testing.T) {
 	if publicResponse.Code != http.StatusOK || json.Unmarshal(publicResponse.Body.Bytes(), &child) != nil ||
 		len(child.PublicKey) != ed25519.PublicKeySize || string(child.PublicKey) == publicKey {
 		t.Fatalf("unexpected derived public key response: %d", publicResponse.Code)
+	}
+	consume := func(n *node, id string, path []uint32, message []byte) result {
+		body, err := json.Marshal(map[string]any{"presignatureId": id, "chainPath": path, "message": message})
+		if err != nil {
+			panic(err)
+		}
+		r := httptest.NewRequest(http.MethodPost, "/frost/keys/"+keyID+"/signwithpresig", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		n.restHandler().ServeHTTP(w, r)
+		return result{w.Code, w.Body.String()}
+	}
+	for _, tc := range []struct {
+		name    string
+		id      string
+		path    []uint32
+		message []byte
+		code    int
+	}{
+		{"invalid id", "invalid", nil, []byte(message), http.StatusBadRequest},
+		{"hardened path", batchResponse.IDs[0], []uint32{1 << 31}, []byte(message), http.StatusBadRequest},
+		{"missing message", batchResponse.IDs[0], nil, nil, http.StatusBadRequest},
+		{"unknown id", base64.RawURLEncoding.EncodeToString(make([]byte, 32)), nil, []byte(message), http.StatusNotFound},
+	} {
+		if got := consume(nodes[0], tc.id, tc.path, tc.message); got.status != tc.code {
+			t.Fatalf("%s: status = %d, want %d", tc.name, got.status, tc.code)
+		}
+	}
+	if got := consume(nodes[1], batchResponse.IDs[0], nil, []byte(message)); got.status != http.StatusNotFound {
+		t.Fatalf("nonparticipant: status = %d, want 404", got.status)
+	}
+	// Signing from precomputed material must work without reaching any peers.
+	nodes[0].client.Transport = localPeerTransport(nil)
+	nodes[2].client.Transport = localPeerTransport(nil)
+	for i, tc := range []struct {
+		path      []uint32
+		publicKey []byte
+		message   []byte
+	}{{nil, []byte(publicKey), []byte(message)}, {[]uint32{0, 1}, child.PublicKey, []byte{}}} {
+		id := batchResponse.IDs[i]
+		var left result
+		if i == 0 {
+			left = consume(nodes[0], "", tc.path, tc.message)
+		} else {
+			for range 2 {
+				go func() { results <- consume(nodes[0], id, tc.path, tc.message) }()
+			}
+			var retry result
+			left, retry = <-results, <-results
+			if retry.status == http.StatusOK {
+				left, retry = retry, left
+			}
+			if retry.status != http.StatusNotFound {
+				t.Fatalf("concurrent reuse: status = %d, want 404", retry.status)
+			}
+		}
+		right := consume(nodes[2], id, tc.path, tc.message)
+		sum := ristretto.NewScalar()
+		var nonce, challenge []byte
+		for j, reply := range []result{left, right} {
+			var part struct {
+				PresignatureID, Curve, Sharing  string
+				Variant                         string `json:"schnorr_variant"`
+				PlayerIndex, Threshold          int
+				R, PublicKey, SShare, Challenge []byte
+			}
+			if reply.status != http.StatusOK || json.Unmarshal([]byte(reply.body), &part) != nil ||
+				part.PresignatureID != id || part.Curve != "ed25519" || part.Variant != "Ed25519" ||
+				part.Sharing != "additive" || part.Threshold != 1 || part.PlayerIndex != j*2 ||
+				!bytes.Equal(part.PublicKey, tc.publicKey) || len(part.R) != 32 || len(part.Challenge) != 32 {
+				t.Fatalf("unexpected FROST partial signature response from player %d: %d", j, reply.status)
+			}
+			if j == 0 {
+				nonce, challenge = part.R, part.Challenge
+			} else if !bytes.Equal(part.R, nonce) || !bytes.Equal(part.Challenge, challenge) {
+				t.Fatal("FROST partial signatures disagree on the transcript")
+			}
+			slices.Reverse(part.SShare)
+			s, err := ristretto.NewScalar().SetCanonicalBytes(part.SShare)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sum.Add(sum, s)
+		}
+		if !ed25519.Verify(tc.publicKey, tc.message, append(nonce, sum.Bytes()...)) {
+			t.Fatal("combined FROST signature failed Ed25519 verification")
+		}
+		for _, n := range []*node{reopened, nodes[2]} {
+			if replay := consume(n, id, tc.path, tc.message); replay.status != http.StatusNotFound {
+				t.Fatalf("consumed presignature status = %d, want 404", replay.status)
+			}
+		}
+	}
+	nodes[0].client.Transport = localPeerTransport(transport)
+	nodes[2].client.Transport = localPeerTransport(transport)
+	if replay := presign(reopened, presignPath); replay != batch {
+		t.Fatalf("unexpected batch replay after consumption: %v", replay)
+	}
+	if got := consume(reopened, "", nil, []byte(message)); got.status != http.StatusNotFound {
+		t.Fatalf("batch replay restored a consumed presignature: %d", got.status)
 	}
 	if conflict := sign(nodes[0], `{"chainPath":[0,1],"message":"RlJPU1Qgc2lnbmluZyB0ZXN0"}`, "1", "3"); conflict.status != http.StatusConflict {
 		t.Fatalf("changed path status = %d, want 409", conflict.status)

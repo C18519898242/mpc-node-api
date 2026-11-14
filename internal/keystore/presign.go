@@ -17,6 +17,15 @@ type Presignature struct {
 // ConsumeECDSAPresign atomically deletes and returns one local share. An empty
 // ID selects the oldest available share for the key.
 func (s *SQLite) ConsumeECDSAPresign(ctx context.Context, keyID, presignatureID string) (Presignature, error) {
+	return s.consumePresign(ctx, "ecdsa", keyID, presignatureID)
+}
+
+// ConsumeFROSTPresign atomically deletes and returns one local FROST share.
+func (s *SQLite) ConsumeFROSTPresign(ctx context.Context, keyID, presignatureID string) (Presignature, error) {
+	return s.consumePresign(ctx, "frost", keyID, presignatureID)
+}
+
+func (s *SQLite) consumePresign(ctx context.Context, algorithm, keyID, presignatureID string) (Presignature, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Presignature{}, err
@@ -24,10 +33,10 @@ func (s *SQLite) ConsumeECDSAPresign(ctx context.Context, keyID, presignatureID 
 	defer tx.Rollback()
 
 	var share Presignature
-	err = tx.QueryRowContext(ctx, `DELETE FROM ecdsa_presignatures WHERE id = (
-		SELECT id FROM ecdsa_presignatures WHERE key_id = ? AND (? = '' OR presignature_id = ?)
+	err = tx.QueryRowContext(ctx, fmt.Sprintf(`DELETE FROM %s_presignatures WHERE id = (
+		SELECT id FROM %s_presignatures WHERE key_id = ? AND (? = '' OR presignature_id = ?)
 		ORDER BY id LIMIT 1
-	) RETURNING presignature_id, share`, keyID, presignatureID, presignatureID).Scan(&share.ID, &share.Share)
+	) RETURNING presignature_id, share`, algorithm, algorithm), keyID, presignatureID, presignatureID).Scan(&share.ID, &share.Share)
 	if err == nil {
 		err = tx.Commit()
 	}
