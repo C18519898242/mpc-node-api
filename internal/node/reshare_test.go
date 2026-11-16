@@ -128,7 +128,7 @@ func TestReshare(t *testing.T) {
 			}
 			if tc.algorithm == "frost" && tc.threshold == 2 {
 				nodes[0].keys = failingReshareCommit{nodes[0].keys}
-				replies := all("/schnorr/keys/refresh-key/reshare", "refresh", nil, 0)
+				replies := all(key+"/reshare", "refresh", nil, 0)
 				successes, failures := 0, 0
 				for _, got := range replies {
 					switch got.code {

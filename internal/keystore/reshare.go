@@ -77,7 +77,7 @@ func (s *SQLite) StageReshare(ctx context.Context, op Reshare, digest [32]byte, 
 	result, err := s.db.ExecContext(ctx, `UPDATE reshare_sessions SET digest = ?, share = ?, state = 'prepared'
 		WHERE algorithm = ? AND session_id = ? AND key_id = ? AND state = 'started'`,
 		digest[:], share, op.Algorithm, op.SessionID, op.KeyID)
-	return requireReshareUpdate(result, err)
+	return requireShareUpdate(result, err)
 }
 
 func (s *SQLite) CommitReshare(ctx context.Context, op Reshare) error {
@@ -100,7 +100,7 @@ func (s *SQLite) CommitReshare(ctx context.Context, op Reshare) error {
 	) WHERE algorithm = ? AND key_id = ? AND EXISTS (
 		SELECT 1 FROM reshare_sessions WHERE algorithm = ? AND key_id = ? AND session_id = ? AND state = 'prepared'
 	)`, op.Algorithm, op.KeyID, op.SessionID, op.Algorithm, op.KeyID, op.Algorithm, op.KeyID, op.SessionID)
-	if err := requireReshareUpdate(result, err); err != nil {
+	if err := requireShareUpdate(result, err); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE key_id = ?", table), op.KeyID); err != nil {
@@ -123,13 +123,13 @@ func (s *SQLite) CommitReshare(ctx context.Context, op Reshare) error {
 	return tx.Commit()
 }
 
-func requireReshareUpdate(result sql.Result, err error) error {
+func requireShareUpdate(result sql.Result, err error) error {
 	if err != nil {
 		return err
 	}
 	count, err := result.RowsAffected()
 	if err == nil && count != 1 {
-		err = errors.New("invalid reshare state")
+		err = errors.New("invalid key share state")
 	}
 	return err
 }

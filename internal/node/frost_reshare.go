@@ -31,12 +31,13 @@ type frostRefreshContribution struct {
 
 func (n *node) refreshFROST(ctx context.Context, keyID, route string, session *keygenSession) ([]byte, [32]byte, error) {
 	var epoch [32]byte
-	roster, ids, frostIDs := n.frostRoster()
-	self := ids[n.config.PartyID]
-	current, err := n.loadFROSTSigningShare(ctx, keyID, self, frostIDs)
+	current, err := n.loadFROSTSigningShare(ctx, keyID)
 	if err != nil {
 		return nil, epoch, err
 	}
+	roster := current.Players
+	ids, frostIDs := frostIDsFor(roster)
+	self := ids[n.config.PartyID]
 	degree := int(current.Public.Threshold)
 	if degree < 1 || degree >= len(roster) {
 		return nil, epoch, errors.New("invalid FROST reshare threshold")
@@ -51,7 +52,7 @@ func (n *node) refreshFROST(ctx context.Context, keyID, route string, session *k
 		if toIndex >= 0 {
 			msg.To = roster[toIndex]
 		}
-		return n.sendMessage(ctx, route, msg, nil)
+		return n.sendMessage(ctx, route, msg, roster)
 	}
 
 	// Each dealer contributes a random degree-t polynomial with implicit zero
@@ -122,7 +123,7 @@ func (n *node) refreshFROST(ctx context.Context, keyID, route string, session *k
 	if err != nil {
 		return nil, epoch, err
 	}
-	data, err := json.Marshal(&keygen.Output{SecretKey: localShare, Public: refreshed})
+	data, err := marshalFROSTShare(&keygen.Output{SecretKey: localShare, Public: refreshed}, roster)
 	return data, sha256.Sum256(public), err
 }
 
@@ -216,9 +217,8 @@ func validFROSTRefreshShares(old, refreshed *eddsa.Public) bool {
 	if refreshed.Threshold == 1 {
 		return true
 	}
-	// A degree-1 sharing would already recover the key from the first two shares.
-	// For these fixed nonzero IDs, equality detects a zero quadratic coefficient.
-	ids := refreshed.PartyIDs[:2]
+	// Equality at zero detects a missing leading coefficient.
+	ids := refreshed.PartyIDs[:int(refreshed.Threshold)]
 	linear := ristretto.NewIdentityElement()
 	for _, id := range ids {
 		weight, _ := id.Lagrange(ids)

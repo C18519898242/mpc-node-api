@@ -51,8 +51,7 @@ func (n *node) signWithFROSTPresign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	_, ids, roster := n.frostRoster()
-	key, err := n.loadFROSTSigningShare(r.Context(), keyID, ids[n.config.PartyID], roster)
+	stored, err := n.loadFROSTSigningShare(r.Context(), keyID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		http.NotFound(w, r)
@@ -61,6 +60,8 @@ func (n *node) signWithFROSTPresign(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load signing key", http.StatusInternalServerError)
 		return
 	}
+	ids, _ := frostIDsFor(stored.Players)
+	key := &stored.Output
 	if len(request.ChainPath) != 0 {
 		secret, public, err := key.Public.DeriveShare(key.SecretKey, key.Public.GroupKey.DefaultChainCode(), request.ChainPath)
 		if err != nil {

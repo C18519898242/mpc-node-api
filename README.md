@@ -1,6 +1,6 @@
 # mpc-node-api
 
-单个 MPC 节点的 Go HTTP 服务。当前支持 CMP（secp256k1 ECDSA）和 FROST-Ed25519 三节点建钥。
+单个 MPC 节点的 Go HTTP 服务，支持 CMP（secp256k1 ECDSA）和 FROST-Ed25519 建钥及签名。仓库提供三节点联调配置。
 
 ## 代码结构
 
@@ -33,12 +33,12 @@
 
 ## ECDSA 建钥接口
 
-`POST /ecdsa/keys?mpc_routing_id=<routingID>`。对三个节点并发发送同一份 JSON 和会话头。
+`POST /ecdsa/keys?mpc_routing_id=<routingID>`。对 `MPC-Players` 指定的节点并发发送同一份 JSON 和会话头。
 
-- 请求体示例为 `{"threshold":1,"curve":"secp256k1","keyID":""}`。安全阈值 `1` 对应 2-of-3，`2` 对应 3-of-3，两种建钥都需要三个节点参与。
+- 请求体示例为 `{"threshold":1,"curve":"secp256k1","keyID":""}`。签名至少需要 `threshold + 1` 个节点，建钥要由本次选定的所有节点参与。
 - `MPC-SessionID` 使用每次操作的新 ID。对其字节计算 64 位 FNV-1a，清除最高位后格式化为 16 位小写十六进制，作为 `MPC-RoutingID` 和查询参数的值。
 - `MPC-Players` 每个玩家一条请求头，默认配置的玩家 ID 为 `1`、`2`、`3`，顺序不限。
-- 三个节点各自完成建钥后返回 HTTP 200 和 `{"keyID":"..."}`。传空 `keyID` 时，各节点从会话 ID 生成相同的 ID。调用方应等待三个响应并比对 ID。
+- 各节点完成建钥后返回 HTTP 200 和 `{"keyID":"..."}`。传空 `keyID` 时，各节点从会话 ID 生成相同的 ID。调用方应等待全部响应并比对 ID。
 
 此接口采用静态玩家和服务端固定会话超时。节点把分片写入 SQLite 后返回成功。
 
@@ -70,7 +70,7 @@
 
 ## FROST-Ed25519 建钥接口
 
-`POST /frost/keys?mpc_routing_id=<routingID>` 沿用上面的会话头、路由 ID 算法和同步响应格式。对三个节点并发发送同一份请求，例如 `{"threshold":1,"curve":"ed25519","keyID":""}`。支持安全阈值 `1`（2-of-3）和 `2`（3-of-3），建钥均由三个节点参与。
+`POST /frost/keys?mpc_routing_id=<routingID>` 沿用上面的会话头、路由 ID 算法和同步响应格式。向选定组并发发送同一份请求，例如 `{"threshold":1,"curve":"ed25519","keyID":""}`。
 
 节点把本地分片和 FROST 公共信息写入 SQLite 后返回成功。
 
@@ -96,13 +96,30 @@
 
 ## 刷新密钥分片
 
-`POST /ecdsa/keys/{keyID}/reshare` 和 `POST /frost/keys/{keyID}/reshare` 刷新现有密钥在三个节点上的分片。Ed25519 也支持文档中的 `POST /schnorr/keys/{keyID}/reshare`。刷新保留原 `keyID`、阈值、根公钥和派生公钥。
+`POST /ecdsa/keys/{keyID}/reshare` 和 `POST /frost/keys/{keyID}/reshare` 刷新现有密钥在所有分片持有者上的分片。刷新保留原 `keyID`、阈值、根公钥和派生公钥。
 
-首次刷新使用新的 MPC 会话 ID，向三个节点并行发送相同参数。沿用建钥的 `MPC-SessionID`、`MPC-RoutingID`、三条 `MPC-Players` 及 URL 查询参数 `mpc_routing_id`，请求体留空。每个节点成功后返回 HTTP 204。刷新期间，同一密钥上的签名和预签名操作可能返回 HTTP 409。
+首次刷新使用新的 MPC 会话 ID，向所有分片持有者并行发送相同参数。沿用建钥的 `MPC-SessionID`、`MPC-RoutingID`、每个玩家一条 `MPC-Players` 及 URL 查询参数 `mpc_routing_id`，请求体留空。每个节点成功后返回 HTTP 204。刷新期间，同一密钥上的签名和预签名操作可能返回 HTTP 409。
 
 节点把候选分片暂存到各自的 SQLite，确认全组已持久化同一代次后再启用。本地启用和清理该密钥的旧预签名在同一事务中提交。协调端收到全部 204 后再恢复签名，并清理缓存的旧预签名 ID、重新生成所需的预签名和分片备份。
 
 如果只收到部分 204，向全组重发原会话，已暂存的节点可从 SQLite 继续确认和启用。如果会话在候选分片写入前中断，且确认全组仍处于刷新前的同一代次，使用新的会话 ID 重试。
+
+## 复制密钥到另一个分片组
+
+ECDSA 使用 `POST /ecdsa/keys/{sourceKeyID}/keycopy`，Ed25519 使用 `POST /frost/keys/{sourceKeyID}/keycopy`。请求使用建钥的 MPC 会话头和 `mpc_routing_id`。向目标组所有节点并发发送，同一次复制使用同一个新会话 ID、目标 `MPC-Players`、目标 `keyID` 和目标 `threshold`。目标阈值从 1 到目标组人数减 1，目标组至少包含原安全阈值加 1 个原分片持有者。
+
+以 `old-key` 的原持有者 1、3（安全阈值 1）为例，复制给 1、2、3 并将副本阈值设为 2。
+
+| 算法 | 持有者 1、3 | 新节点 2 |
+| --- | --- | --- |
+| ECDSA | 路径 `/ecdsa/keys/old-key/keycopy`，请求 `{"keyID":"new-key","threshold":2,"curve":""}` | 路径 `/ecdsa/keys/_/keycopy`，请求 `{"keyID":"new-key","threshold":2,"curve":"secp256k1"}` |
+| Ed25519 | 路径 `/frost/keys/old-key/keycopy`，请求 `{"keyID":"new-key","threshold":2,"curve":"","schnorr_variant":""}` | 路径 `/frost/keys/_/keycopy`，请求 `{"keyID":"new-key","threshold":2,"curve":"ED-25519","schnorr_variant":"Ed25519"}` |
+
+所有节点的 `keyID` 都传空字符串时，由会话 ID 生成相同的副本 ID。各目标节点在内存中校验候选分片，确认同一组候选分片后把本节点的正式分片写入 `key_shares`，成功响应 `{"keyID":"new-key"}`。副本保留根公钥和派生公钥，拥有独立分片和预签名。原密钥继续通过原 ID 使用。
+
+收到所有目标节点的成功响应后再使用副本。若复制失败或中断，用新会话和新副本 ID 重试。节点在内存中短暂保留已完成会话的参数和结果，用于返回相同请求的结果以及等待同组节点确认。节点重启后可按 `keyID` 使用已写入的正式分片。
+
+每个目标节点的 `peers` 必须包含其他目标玩家。新建和复制的 FROST 密钥会保存自己的玩家列表。如果要在已有旧版 FROST 分片的节点上调整 `peers`，把这些旧密钥的原玩家列表填到 `legacyFrostPlayers`，例如 `["1","2","3"]`。
 
 ## 节点数据库
 

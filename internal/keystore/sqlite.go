@@ -83,6 +83,9 @@ func initSQLite(db *sql.DB, partyID string) error {
 	if err := migrateKeyShares(tx); err != nil {
 		return err
 	}
+	if err := removeCopyColumns(tx); err != nil {
+		return err
+	}
 	if err := createPresignTables(tx); err != nil {
 		return err
 	}
@@ -125,6 +128,22 @@ func migrateKeyShares(tx *sql.Tx) error {
 	} {
 		if _, err := tx.Exec(query); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func removeCopyColumns(tx *sql.Tx) error {
+	for _, column := range []string{"request_binding", "copy_digest", "copy_candidate"} {
+		var exists bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('key_shares')
+			WHERE name = ?)`, column).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			if _, err := tx.Exec("ALTER TABLE key_shares DROP COLUMN " + column); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -74,8 +75,8 @@ func (n *node) generateECDSAKey(w http.ResponseWriter, r *http.Request) {
 
 func (n *node) generateECDSAShare(ctx context.Context, id string, session *keygenSession) ([]byte, error) {
 	// A key ID mismatch must also change the CMP session identity.
-	protocolID := sha256.Sum256([]byte(id + ":" + session.key.KeyID))
-	share, err := n.executeKeygen(ctx, id, protocolID[:], session.key.Threshold, session.incoming)
+	protocolID := sha256.Sum256(fmt.Appendf(nil, "%s:%s:%q", id, session.key.KeyID, session.players))
+	share, err := n.executeKeygen(ctx, id, protocolID[:], session.key.Threshold, session.players, session.incoming)
 	if err != nil {
 		return nil, err
 	}

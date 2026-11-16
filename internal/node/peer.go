@@ -18,6 +18,7 @@ func (n *node) peerHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /internal/mpc/{sessionId}", n.receiveMessage)
 	mux.HandleFunc("POST /internal/reshare/{sessionId}/ready", n.reshareReady)
+	mux.HandleFunc("POST /internal/keycopy/{sessionId}/ready", n.keyCopyReady)
 	return mux
 }
 
@@ -45,6 +46,15 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "MPC session failed on this node", http.StatusConflict)
 	default:
 		incoming := session.incoming
+		if session.copyIncoming != nil {
+			if !session.players.Contains(message.From) {
+				http.Error(w, "unexpected key copy player", http.StatusBadRequest)
+				return
+			}
+			if strings.HasPrefix(message.Protocol, "keycopy/") {
+				incoming = session.copyIncoming
+			}
+		}
 		if presign {
 			if slot >= len(session.presignInboxes) {
 				http.Error(w, "invalid presign slot", http.StatusBadRequest)
@@ -62,6 +72,9 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func validPeerSessionID(id string) bool {
+	if _, _, ok := parseKeyCopyRoute(id); ok {
+		return true
+	}
 	if _, _, ok := parseReshareRoute(id); ok {
 		return true
 	}

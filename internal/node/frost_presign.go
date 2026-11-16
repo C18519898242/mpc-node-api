@@ -35,15 +35,14 @@ func (n *node) generateFROSTPresign(w http.ResponseWriter, r *http.Request) {
 }
 
 func (n *node) prepareFROSTPresign(ctx context.Context, keyID string, signers party.IDSlice) (generatePresignSlot, error) {
-	_, ids, roster := n.frostRoster()
-	self := ids[n.config.PartyID]
-	share, err := n.loadFROSTSigningShare(ctx, keyID, self, roster)
+	share, err := n.loadFROSTSigningShare(ctx, keyID)
 	if err != nil {
 		return nil, err
 	}
-	if len(signers) <= int(share.Public.Threshold) {
+	if !canFROSTSign(share, signers) {
 		return nil, errPresignRoster
 	}
+	ids, _ := frostIDsFor(share.Players)
 	publicKey := share.Public.GroupKey.ToEd25519()
 	return func(ctx context.Context, route string, binding [32]byte, inbox <-chan *protocol.Message) (keystore.Presignature, error) {
 		keyBinding := sha256.Sum256(append(binding[:], publicKey...))

@@ -9,6 +9,7 @@ import (
 	"hash/fnv"
 	"net/http"
 	"regexp"
+	"slices"
 	"time"
 
 	"github.com/C18519898242/mpc-node-api/internal/keystore"
@@ -39,19 +40,14 @@ func (n *node) generateKey(w http.ResponseWriter, r *http.Request, prefix, curve
 		http.Error(w, "invalid MPC-SessionID", http.StatusBadRequest)
 		return
 	}
-	routingID := mpcRoutingID(sessionID)
-	if r.Header.Get("MPC-RoutingID") != routingID || r.URL.Query().Get("mpc_routing_id") != routingID {
-		http.Error(w, "invalid MPC routing ID", http.StatusBadRequest)
-		return
-	}
-	if !n.validPlayers(r.Header.Values("MPC-Players")) {
-		http.Error(w, "MPC-Players must match the configured node group", http.StatusBadRequest)
+	players := n.signingPlayers(w, r, sessionID)
+	if players == nil {
 		return
 	}
 
 	var request generateKeyRequest
 	if decodeJSON(w, r, &request, 4096) != nil || request.Curve != curve ||
-		(request.Threshold != 1 && request.Threshold != 2) ||
+		(request.Threshold < 1 || request.Threshold >= len(players)) ||
 		(request.KeyID != "" && !keyIDPattern.MatchString(request.KeyID)) {
 		http.Error(w, "invalid "+curve+" keygen parameters", http.StatusBadRequest)
 		return
@@ -63,7 +59,7 @@ func (n *node) generateKey(w http.ResponseWriter, r *http.Request, prefix, curve
 	key := keystore.Key{
 		Algorithm: prefix[:len(prefix)-1], SessionID: sessionID, KeyID: request.KeyID, Threshold: request.Threshold,
 	}
-	session, err := n.beginStoredKeygen(r.Context(), prefix+sessionID, key, generate)
+	session, err := n.beginStoredKeygen(r.Context(), prefix+sessionID, key, players, generate)
 	if err != nil {
 		http.Error(w, "could not reserve keygen", http.StatusInternalServerError)
 		return
@@ -91,27 +87,11 @@ func mpcRoutingID(sessionID string) string {
 	return fmt.Sprintf("%016x", h.Sum64()&0x7fffffffffffffff)
 }
 
-func (n *node) validPlayers(players []string) bool {
-	if len(players) != len(n.config.Peers)+1 {
-		return false
-	}
-	seen := make(map[party.ID]bool, len(players))
-	for _, player := range players {
-		id := party.ID(player)
-		_, isPeer := n.config.Peers[id]
-		if seen[id] || (id != n.config.PartyID && !isPeer) {
-			return false
-		}
-		seen[id] = true
-	}
-	return true
-}
-
-func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Key, generate generateShare) (*keygenSession, error) {
+func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Key, players party.IDSlice, generate generateShare) (*keygenSession, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if session := n.sessions[id]; session != nil {
-		if session.key == key {
+		if session.key == key && slices.Equal(session.players, players) {
 			return session, nil
 		}
 		return nil, nil
@@ -125,8 +105,13 @@ func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Ke
 		status:   keygenStatus{State: "running"},
 		done:     make(chan struct{}),
 		key:      key,
+		players:  players,
 	}
 	if outcome == keystore.Completed {
+		storedPlayers, err := n.keyPlayers(ctx, key.Algorithm, key.KeyID)
+		if err != nil || !slices.Equal(storedPlayers, players) {
+			return nil, err
+		}
 		session.status.State = "succeeded"
 		close(session.done)
 		return session, nil

@@ -18,6 +18,9 @@ const keygenTimeout = 3 * time.Minute
 
 type keygenSession struct {
 	incoming       chan *protocol.Message
+	copyIncoming   chan *protocol.Message
+	copySourceID   string
+	copyDigest     *[32]byte
 	status         keygenStatus
 	done           chan struct{}
 	key            keystore.Key
@@ -25,6 +28,7 @@ type keygenSession struct {
 	signature      []byte
 	presignInboxes []chan *protocol.Message
 	presignIDs     []string
+	players        party.IDSlice
 }
 
 type keygenStatus struct {
@@ -77,7 +81,7 @@ func (n *node) runKeygen(id string, session *keygenSession) {
 	ctx, cancel := context.WithTimeout(context.Background(), keygenTimeout)
 	defer cancel()
 
-	share, err := n.executeKeygen(ctx, id, []byte(id), 2, session.incoming)
+	share, err := n.executeKeygen(ctx, id, []byte(id), 2, n.configuredPlayers(), session.incoming)
 	var status keygenStatus
 	stage := "protocol"
 	if err == nil {
@@ -94,13 +98,17 @@ func (n *node) runKeygen(id string, session *keygenSession) {
 	session.status = status
 }
 
-func (n *node) executeKeygen(ctx context.Context, id string, protocolID []byte, threshold int, incoming <-chan *protocol.Message) (*cmp.Config, error) {
+func (n *node) configuredPlayers() party.IDSlice {
 	parties := []party.ID{n.config.PartyID}
 	for peer := range n.config.Peers {
 		parties = append(parties, peer)
 	}
+	return party.NewIDSlice(parties)
+}
+
+func (n *node) executeKeygen(ctx context.Context, id string, protocolID []byte, threshold int, parties party.IDSlice, incoming <-chan *protocol.Message) (*cmp.Config, error) {
 	start := cmp.Keygen(curve.Secp256k1{}, n.config.PartyID, parties, threshold, nil)
-	result, err := n.runCMP(ctx, id, protocolID, start, incoming, nil)
+	result, err := n.runCMP(ctx, id, protocolID, start, incoming, parties)
 	if err != nil {
 		return nil, err
 	}

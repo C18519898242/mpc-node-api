@@ -48,6 +48,48 @@ func TestSQLiteReopen(t *testing.T) {
 	}
 }
 
+func TestSQLiteRemovesCopySessionColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "node.sqlite")
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = old.Exec(createKeyShares + `;
+		ALTER TABLE key_shares ADD COLUMN request_binding TEXT NOT NULL DEFAULT '';
+		ALTER TABLE key_shares ADD COLUMN copy_digest BLOB;
+		ALTER TABLE key_shares ADD COLUMN copy_candidate BLOB;
+		INSERT INTO key_shares (id, algorithm, session_id, key_id, threshold, share, created_at, request_binding, copy_digest)
+			VALUES (4, 'frost', 'copy.saved', 'copy-key', 2, X'1234', '2026-11-16 15:48:13', 'request', X'1234');`)
+	closeErr := old.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("create old copy schema: %v, %v", err, closeErr)
+	}
+	for range 2 {
+		store, err := OpenSQLite(path, "1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = store.Close() })
+		var columns, id int
+		var createdAt string
+		if err := store.db.QueryRow(`SELECT count(*) FROM pragma_table_info('key_shares')
+			WHERE name IN ('request_binding', 'copy_digest', 'copy_candidate')`).Scan(&columns); err != nil || columns != 0 {
+			t.Fatalf("obsolete copy columns: %d, %v", columns, err)
+		}
+		share, err := store.Load(context.Background(), "frost", "copy-key")
+		if err != nil || !bytes.Equal(share, []byte{0x12, 0x34}) {
+			t.Fatalf("completed copy lost: %v", err)
+		}
+		if err := store.db.QueryRow("SELECT id, created_at FROM key_shares WHERE key_id = 'copy-key'").
+			Scan(&id, &createdAt); err != nil || id != 4 || createdAt != "2026-11-16 15:48:13" {
+			t.Fatalf("completed copy metadata = %d, %q, %v", id, createdAt, err)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestSQLiteMigratesKeyShareIDsAndTimestamps(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "node.sqlite")

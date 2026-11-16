@@ -13,6 +13,7 @@ import (
 	"github.com/taurusgroup/frost-ed25519/pkg/frost"
 	"github.com/taurusgroup/frost-ed25519/pkg/frost/keygen"
 	frostparty "github.com/taurusgroup/frost-ed25519/pkg/frost/party"
+	"github.com/taurusgroup/multi-party-sig/pkg/party"
 )
 
 const frostSignPrefix = "frost-sign."
@@ -43,8 +44,7 @@ func (n *node) signFROST(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
-	roster, ids, frostIDs := n.frostRoster()
-	share, err := n.loadFROSTSigningShare(r.Context(), keyID, ids[n.config.PartyID], frostIDs)
+	share, err := n.loadFROSTSigningShare(r.Context(), keyID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		http.NotFound(w, r)
@@ -53,10 +53,12 @@ func (n *node) signFROST(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load signing key", http.StatusInternalServerError)
 		return
 	}
-	if len(signers) <= int(share.Public.Threshold) {
-		http.Error(w, "signing players do not satisfy the key threshold", http.StatusBadRequest)
+	if !canFROSTSign(share, signers) {
+		http.Error(w, "signing players do not satisfy the key threshold or roster", http.StatusBadRequest)
 		return
 	}
+	roster := share.Players
+	ids, _ := frostIDsFor(roster)
 	selected := make(frostparty.IDSlice, len(signers))
 	for i, signer := range signers {
 		selected[i] = ids[signer]
@@ -70,7 +72,7 @@ func (n *node) signFROST(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					return nil, err
 				}
-				share = &keygen.Output{SecretKey: secret, Public: public}
+				share.Output = keygen.Output{SecretKey: secret, Public: public}
 			}
 			state, output, err := frost.NewSignState(selected, share.SecretKey, share.Public, request.Message, 0)
 			if err != nil {
@@ -90,18 +92,41 @@ func (n *node) signFROST(w http.ResponseWriter, r *http.Request) {
 		})
 }
 
-func (n *node) loadFROSTSigningShare(ctx context.Context, keyID string, self frostparty.ID, roster frostparty.IDSlice) (*keygen.Output, error) {
+func canFROSTSign(share *storedFROSTShare, signers party.IDSlice) bool {
+	if len(signers) <= int(share.Public.Threshold) {
+		return false
+	}
+	for _, id := range signers {
+		if !share.Players.Contains(id) {
+			return false
+		}
+	}
+	return true
+}
+
+func (n *node) loadFROSTSigningShare(ctx context.Context, keyID string) (*storedFROSTShare, error) {
 	data, err := n.keys.Load(ctx, "frost", keyID)
 	if err != nil {
 		return nil, err
 	}
 	defer clear(data)
-	var share keygen.Output
+	var share storedFROSTShare
 	if err := json.Unmarshal(data, &share); err != nil {
 		return nil, err
 	}
+	if len(share.Players) == 0 {
+		share.Players = n.configuredPlayers()
+		if len(n.config.LegacyFROSTPlayers) != 0 {
+			share.Players = party.NewIDSlice(n.config.LegacyFROSTPlayers)
+		}
+	}
+	if !share.Players.Valid() {
+		return nil, errors.New("invalid stored FROST player list")
+	}
+	ids, roster := frostIDsFor(share.Players)
+	self := ids[n.config.PartyID]
 	if share.SecretKey == nil || share.Public == nil || share.Public.GroupKey == nil ||
-		share.SecretKey.ID != self || !slices.Equal(share.Public.PartyIDs, roster) {
+		self == 0 || share.SecretKey.ID != self || !slices.Equal(share.Public.PartyIDs, roster) {
 		return nil, errors.New("stored FROST share does not match the configured node group")
 	}
 	publicShare := share.Public.Shares[self]

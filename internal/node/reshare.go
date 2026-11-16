@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/C18519898242/mpc-node-api/internal/keystore"
+	"github.com/taurusgroup/multi-party-sig/pkg/party"
 	"github.com/taurusgroup/multi-party-sig/pkg/protocol"
 	"github.com/taurusgroup/multi-party-sig/protocols/cmp"
 )
@@ -25,9 +26,12 @@ func (n *node) reshareKey(algorithm string) http.HandlerFunc {
 		routingID := mpcRoutingID(op.SessionID)
 		var body [1]byte
 		if !keyIDPattern.MatchString(op.KeyID) || !memorySessionPattern.MatchString(op.SessionID) ||
-			r.Header.Get("MPC-RoutingID") != routingID || r.URL.Query().Get("mpc_routing_id") != routingID ||
-			!n.validPlayers(r.Header.Values("MPC-Players")) {
+			r.Header.Get("MPC-RoutingID") != routingID || r.URL.Query().Get("mpc_routing_id") != routingID {
 			http.Error(w, "invalid reshare session or players", http.StatusBadRequest)
+			return
+		}
+		players := n.signingPlayers(w, r, op.SessionID)
+		if players == nil {
 			return
 		}
 		if read, err := io.ReadFull(r.Body, body[:]); read != 0 || err != io.EOF {
@@ -39,6 +43,19 @@ func (n *node) reshareKey(algorithm string) http.HandlerFunc {
 			return
 		}
 		defer release()
+		expected, err := n.keyPlayers(r.Context(), algorithm, op.KeyID)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			http.Error(w, "could not load reshare key", http.StatusInternalServerError)
+			return
+		}
+		if !slices.Equal(players, expected) {
+			http.Error(w, "reshare requires all current share holders", http.StatusBadRequest)
+			return
+		}
 
 		reservation, stored, err := n.keys.ReserveReshare(r.Context(), op)
 		switch {
@@ -59,7 +76,7 @@ func (n *node) reshareKey(algorithm string) http.HandlerFunc {
 		start := time.Now()
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), keygenTimeout)
 		defer cancel()
-		stage, err := n.runReshare(ctx, op, stored.Digest)
+		stage, err := n.runReshare(ctx, op, players, stored.Digest)
 		n.logMPCResult("reshare", algorithm, stage, start, err)
 		if err != nil {
 			http.Error(w, "reshare failed", http.StatusInternalServerError)
@@ -69,7 +86,22 @@ func (n *node) reshareKey(algorithm string) http.HandlerFunc {
 	}
 }
 
-func (n *node) runReshare(ctx context.Context, op keystore.Reshare, digest []byte) (string, error) {
+func (n *node) keyPlayers(ctx context.Context, algorithm, keyID string) (party.IDSlice, error) {
+	if algorithm == "frost" {
+		share, err := n.loadFROSTSigningShare(ctx, keyID)
+		if err != nil {
+			return nil, err
+		}
+		return share.Players, nil
+	}
+	share, err := n.loadECDSAShare(ctx, keyID, nil)
+	if err != nil {
+		return nil, err
+	}
+	return share.PartyIDs(), nil
+}
+
+func (n *node) runReshare(ctx context.Context, op keystore.Reshare, players party.IDSlice, digest []byte) (string, error) {
 	route := op.Algorithm + "-reshare." + op.SessionID
 	if digest == nil {
 		session := &keygenSession{incoming: make(chan *protocol.Message, 32), status: keygenStatus{State: "running"}}
@@ -102,7 +134,11 @@ func (n *node) runReshare(ctx context.Context, op keystore.Reshare, digest []byt
 	if err != nil {
 		return "confirmation", err
 	}
-	for _, addr := range n.config.Peers {
+	for _, player := range players {
+		if player == n.config.PartyID {
+			continue
+		}
+		addr := n.config.Peers[player]
 		if err := n.deliverMessage(ctx, "http://"+addr+"/internal/reshare/"+route+"/ready", body); err != nil {
 			return "confirmation", err
 		}
@@ -157,12 +193,8 @@ func (n *node) refreshECDSA(ctx context.Context, keyID, route string, session *k
 	if err != nil {
 		return nil, epoch, err
 	}
-	roster, _, _ := n.frostRoster()
-	if !slices.Equal(roster, current.PartyIDs()) || current.ID != n.config.PartyID {
-		return nil, epoch, errors.New("stored CMP config does not match the node group")
-	}
 	binding := sha256.Sum256([]byte(route + ":" + keyID))
-	result, err := n.runCMP(ctx, route, binding[:], cmp.Refresh(current, nil), session.incoming, nil)
+	result, err := n.runCMP(ctx, route, binding[:], cmp.Refresh(current, nil), session.incoming, current.PartyIDs())
 	if err != nil {
 		return nil, epoch, err
 	}

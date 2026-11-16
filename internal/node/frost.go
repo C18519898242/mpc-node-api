@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 
 	"github.com/taurusgroup/frost-ed25519/pkg/eddsa"
 	"github.com/taurusgroup/frost-ed25519/pkg/frost"
@@ -91,15 +90,19 @@ func (n *node) generateFROSTShare(ctx context.Context, id string, session *keyge
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(share)
+	return marshalFROSTShare(share, session.players)
 }
 
-func (n *node) frostRoster() ([]party.ID, map[party.ID]frostparty.ID, frostparty.IDSlice) {
-	roster := []party.ID{n.config.PartyID}
-	for peer := range n.config.Peers {
-		roster = append(roster, peer)
-	}
-	slices.Sort(roster)
+type storedFROSTShare struct {
+	keygen.Output
+	Players party.IDSlice `json:"players,omitempty"`
+}
+
+func marshalFROSTShare(share *keygen.Output, players party.IDSlice) ([]byte, error) {
+	return json.Marshal(storedFROSTShare{Output: *share, Players: players})
+}
+
+func frostIDsFor(roster party.IDSlice) (map[party.ID]frostparty.ID, frostparty.IDSlice) {
 	// FROST uses nonzero integer IDs. Every node maps the same sorted roster to 1..N.
 	ids := make(map[party.ID]frostparty.ID, len(roster))
 	frostIDs := make(frostparty.IDSlice, len(roster))
@@ -107,18 +110,19 @@ func (n *node) frostRoster() ([]party.ID, map[party.ID]frostparty.ID, frostparty
 		frostIDs[i] = frostparty.ID(i + 1)
 		ids[peer] = frostIDs[i]
 	}
-	return roster, ids, frostIDs
+	return ids, frostIDs
 }
 
 func (n *node) executeFROSTKeygen(ctx context.Context, id string, session *keygenSession) (*keygen.Output, error) {
-	roster, ids, frostIDs := n.frostRoster()
+	roster := session.players
+	ids, frostIDs := frostIDsFor(roster)
 	// The library's DKG messages do not contain a session ID.
 	binding := sha256.Sum256(fmt.Appendf(nil, "%s:%s:%d:%q", id, session.key.KeyID, session.key.Threshold, roster))
 	state, output, err := frost.NewKeygenState(ids[n.config.PartyID], frostIDs, frostparty.Size(session.key.Threshold), 0)
 	if err != nil {
 		return nil, err
 	}
-	if err := n.runFROST(ctx, id, session, binding, state, roster, ids, nil, false); err != nil {
+	if err := n.runFROST(ctx, id, session, binding, state, roster, ids, roster, false); err != nil {
 		return nil, err
 	}
 	return output, nil
