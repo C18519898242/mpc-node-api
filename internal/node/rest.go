@@ -38,6 +38,7 @@ func (n *node) restHandler() http.Handler {
 	mux.HandleFunc("POST /frost/keys/{keyID}/reshare", n.logRequest("reshare", "frost", n.reshareKey("frost")))
 	mux.HandleFunc("POST /frost/keys/{sourceKeyID}/keycopy", n.logRequest("keycopy", "frost", n.keyCopy("frost")))
 	mux.HandleFunc("POST /key/{keyID}/count/presigs", n.logRequest("countpresigs", "key", n.countPresign))
+	mux.HandleFunc("DELETE /key/{keyID}", n.logRequest("deletekeyshare", "key", n.deleteKeyShare))
 	mux.HandleFunc("DELETE /key/{keyID}/presigs", n.logRequest("deletepresigs", "key", n.deletePresign))
 	mux.HandleFunc("POST /v1/keygen", n.logRequest("keygen", "ecdsa", n.startKeygen))
 	mux.HandleFunc("GET /v1/sessions/{sessionId}", n.getKeygen)

@@ -59,6 +59,11 @@ func (n *node) generateKey(w http.ResponseWriter, r *http.Request, prefix, curve
 	key := keystore.Key{
 		Algorithm: prefix[:len(prefix)-1], SessionID: sessionID, KeyID: request.KeyID, Threshold: request.Threshold,
 	}
+	release := n.lockKeyOperation(w, key.Algorithm, key.KeyID, false)
+	if release == nil {
+		return
+	}
+	defer release()
 	session, err := n.beginStoredKeygen(r.Context(), prefix+sessionID, key, players, generate)
 	if err != nil {
 		http.Error(w, "could not reserve keygen", http.StatusInternalServerError)
@@ -70,6 +75,8 @@ func (n *node) generateKey(w http.ResponseWriter, r *http.Request, prefix, curve
 	}
 	select {
 	case <-r.Context().Done():
+		// The worker can still write a key after the client disconnects.
+		<-session.done
 		return
 	case <-session.done:
 		if session.status.State != "succeeded" {

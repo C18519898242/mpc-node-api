@@ -121,6 +121,12 @@ ECDSA 使用 `POST /ecdsa/keys/{sourceKeyID}/keycopy`，Ed25519 使用 `POST /fr
 
 每个目标节点的 `peers` 必须包含其他目标玩家。新建和复制的 FROST 密钥会保存自己的玩家列表。如果要在已有旧版 FROST 分片的节点上调整 `peers`，把这些旧密钥的原玩家列表填到 `legacyFrostPlayers`，例如 `["1","2","3"]`。
 
+## 删除本地密钥分片
+
+`DELETE /key/{keyID}` 删除接收请求节点上的 ECDSA 或 FROST 分片。请求体留空，无需 MPC 会话头。成功返回 HTTP 204，当前节点没有对应分片时返回 404，同一密钥正在执行操作时返回 409。若两种算法使用了相同的 `keyID`，该节点上的两份分片都会删除。
+
+节点在同一 SQLite 事务中清空 `key_shares.share`、删除本地预签名并作废未启用的刷新分片。数据库保留已使用的 ID，防止旧会话重放后重新生成密钥。删除整组分片时，需要逐个调用持有分片的节点。
+
 ## 节点数据库
 
 `/ecdsa/keys` 和 `/frost/keys` 使用各节点 `dataDir` 下的 `node.sqlite`。默认路径为 `data/node-1/node.sqlite`、`data/node-2/node.sqlite` 和 `data/node-3/node.sqlite`。数据库会记录所属节点，拒绝用其他节点 ID 打开。

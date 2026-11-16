@@ -44,6 +44,15 @@ func (s *SQLite) DeletePresign(ctx context.Context, keyID string) error {
 	return tx.Commit()
 }
 
+func invalidatePresign(ctx context.Context, tx *sql.Tx, algorithm, keyID string) error {
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s_presignatures WHERE key_id = ?", algorithm), keyID); err != nil {
+		return err
+	}
+	// Keep session reservations while invalidating batch IDs.
+	_, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE %s_presign_batches SET ids = NULL WHERE key_id = ?", algorithm), keyID)
+	return err
+}
+
 // ConsumeECDSAPresign atomically deletes and returns one local share. An empty
 // ID selects the oldest available share for the key.
 func (s *SQLite) ConsumeECDSAPresign(ctx context.Context, keyID, presignatureID string) (Presignature, error) {

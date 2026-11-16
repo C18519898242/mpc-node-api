@@ -201,6 +201,37 @@ func (s *SQLite) Load(ctx context.Context, algorithm, keyID string) ([]byte, err
 	return share, err
 }
 
+func (s *SQLite) DeleteKeyShare(ctx context.Context, keyID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// Keep the reservation so replay cannot create another key under this ID.
+	result, err := tx.ExecContext(ctx, "UPDATE key_shares SET share = NULL WHERE key_id = ? AND share IS NOT NULL", keyID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	for _, algorithm := range []string{"ecdsa", "frost"} {
+		if err := invalidatePresign(ctx, tx, algorithm, keyID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE reshare_sessions
+		SET state = 'superseded', share = NULL, digest = NULL
+		WHERE key_id = ? AND state <> 'superseded'`, keyID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *SQLite) Close() error {
 	return s.db.Close()
 }

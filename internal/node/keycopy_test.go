@@ -235,6 +235,22 @@ func TestKeyCopy(t *testing.T) {
 			all(finalPlayers, "final_reshare", func(string) (string, string) {
 				return api + "/" + final.KeyID + "/reshare", ""
 			}, 204)
+
+			deleted := httptest.NewRecorder()
+			nodes["1"].restHandler().ServeHTTP(deleted, httptest.NewRequest(http.MethodDelete, "/key/copy-key", nil))
+			if deleted.Code != http.StatusNoContent {
+				t.Fatalf("delete 3-of-3 copy returned %d", deleted.Code)
+			}
+			if got := call("1", api+"/copy-key/sign", "deleted_sign", target, string(data)); got.Code != http.StatusNotFound {
+				t.Fatalf("sign on node with deleted share returned %d, want 404", got.Code)
+			}
+			all(finalPlayers, "insufficient_sign", func(string) (string, string) {
+				return api + "/copy-key/sign", string(data)
+			}, http.StatusBadRequest)
+			keygen := fmt.Sprintf(`{"keyID":"copy-key","curve":%q,"threshold":2}`, curve)
+			if got := call("1", api, "regenerate_deleted", target, keygen); got.Code != http.StatusConflict {
+				t.Fatalf("reuse of deleted key ID returned %d, want 409", got.Code)
+			}
 		})
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 )
 
 type Reshare struct {
@@ -81,13 +80,7 @@ func (s *SQLite) StageReshare(ctx context.Context, op Reshare, digest [32]byte, 
 }
 
 func (s *SQLite) CommitReshare(ctx context.Context, op Reshare) error {
-	var table string
-	switch op.Algorithm {
-	case "ecdsa":
-		table = "ecdsa_presignatures"
-	case "frost":
-		table = "frost_presignatures"
-	default:
+	if op.Algorithm != "ecdsa" && op.Algorithm != "frost" {
 		return errors.New("unknown reshare algorithm")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -103,11 +96,7 @@ func (s *SQLite) CommitReshare(ctx context.Context, op Reshare) error {
 	if err := requireShareUpdate(result, err); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE key_id = ?", table), op.KeyID); err != nil {
-		return err
-	}
-	// Keep session reservations while invalidating each batch's obsolete IDs.
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE %s_presign_batches SET ids = NULL WHERE key_id = ?", op.Algorithm), op.KeyID); err != nil {
+	if err := invalidatePresign(ctx, tx, op.Algorithm, op.KeyID); err != nil {
 		return err
 	}
 	// Superseded candidates cannot later replace this generation.

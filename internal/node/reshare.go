@@ -218,7 +218,7 @@ func (n *node) lockKeyOperation(w http.ResponseWriter, algorithm, keyID string, 
 	active := n.keyOperations[key]
 	if active < 0 || (exclusive && active != 0) {
 		n.mu.Unlock()
-		http.Error(w, "key busy during reshare or signing", http.StatusConflict)
+		http.Error(w, "key operation in progress", http.StatusConflict)
 		return nil
 	}
 	if exclusive {
