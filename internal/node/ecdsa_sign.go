@@ -33,6 +33,11 @@ func (n *node) signECDSA(w http.ResponseWriter, r *http.Request) {
 	if signers == nil {
 		return
 	}
+	release := n.lockSigningKey(w, r, "ecdsa", keyID)
+	if release == nil {
+		return
+	}
+	defer release()
 
 	share, err := n.loadECDSAShare(r.Context(), keyID, request.ChainPath)
 	switch {

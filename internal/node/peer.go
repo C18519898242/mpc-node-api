@@ -17,6 +17,7 @@ import (
 func (n *node) peerHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /internal/mpc/{sessionId}", n.receiveMessage)
+	mux.HandleFunc("POST /internal/reshare/{sessionId}/ready", n.reshareReady)
 	return mux
 }
 
@@ -61,6 +62,9 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func validPeerSessionID(id string) bool {
+	if _, _, ok := parseReshareRoute(id); ok {
+		return true
+	}
 	if strings.HasPrefix(id, ecdsaPresignPrefix) || strings.HasPrefix(id, frostPresignPrefix) {
 		_, _, ok := splitPresignRoute(id)
 		return ok

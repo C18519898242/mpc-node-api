@@ -16,6 +16,10 @@ import (
 
 type failingLogStore struct{ shareStore }
 
+func (failingLogStore) PendingReshare(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
 func (failingLogStore) Load(context.Context, string, string) ([]byte, error) {
 	return nil, errors.New("sensitive-storage-error")
 }

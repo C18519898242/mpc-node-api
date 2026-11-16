@@ -59,6 +59,8 @@ func (n *node) serveSignature(w http.ResponseWriter, r *http.Request, id, keyID 
 	}
 	select {
 	case <-r.Context().Done():
+		// Keep the key locked until the detached MPC worker finishes.
+		<-session.done
 		return
 	case <-session.done:
 		if session.status.State != "succeeded" {

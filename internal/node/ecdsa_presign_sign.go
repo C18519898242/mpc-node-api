@@ -37,6 +37,11 @@ func (n *node) signWithECDSAPresign(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid ECDSA presign signing request", http.StatusBadRequest)
 		return
 	}
+	release := n.lockSigningKey(w, r, "ecdsa", keyID)
+	if release == nil {
+		return
+	}
+	defer release()
 	root, err := n.loadECDSAShare(r.Context(), keyID, nil)
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)

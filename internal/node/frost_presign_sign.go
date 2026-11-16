@@ -46,6 +46,11 @@ func (n *node) signWithFROSTPresign(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid FROST derivation path", http.StatusBadRequest)
 		return
 	}
+	release := n.lockSigningKey(w, r, "frost", keyID)
+	if release == nil {
+		return
+	}
+	defer release()
 	_, ids, roster := n.frostRoster()
 	key, err := n.loadFROSTSigningShare(r.Context(), keyID, ids[n.config.PartyID], roster)
 	switch {

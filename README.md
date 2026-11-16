@@ -94,6 +94,16 @@
 
 节点提交 SQLite 删除事务后才返回份额。未知或已消费的 ID 返回 HTTP 404。如果部分节点超时或失败，弃用该 ID，换一个 ID 重试。恢复旧数据库备份前须清空可用预签名，防止已消费的材料重新出现。
 
+## 刷新密钥分片
+
+`POST /ecdsa/keys/{keyID}/reshare` 和 `POST /frost/keys/{keyID}/reshare` 刷新现有密钥在三个节点上的分片。Ed25519 也支持文档中的 `POST /schnorr/keys/{keyID}/reshare`。刷新保留原 `keyID`、阈值、根公钥和派生公钥。
+
+首次刷新使用新的 MPC 会话 ID，向三个节点并行发送相同参数。沿用建钥的 `MPC-SessionID`、`MPC-RoutingID`、三条 `MPC-Players` 及 URL 查询参数 `mpc_routing_id`，请求体留空。每个节点成功后返回 HTTP 204。刷新期间，同一密钥上的签名和预签名操作可能返回 HTTP 409。
+
+节点把候选分片暂存到各自的 SQLite，确认全组已持久化同一代次后再启用。本地启用和清理该密钥的旧预签名在同一事务中提交。协调端收到全部 204 后再恢复签名，并清理缓存的旧预签名 ID、重新生成所需的预签名和分片备份。
+
+如果只收到部分 204，向全组重发原会话，已暂存的节点可从 SQLite 继续确认和启用。如果会话在候选分片写入前中断，且确认全组仍处于刷新前的同一代次，使用新的会话 ID 重试。
+
 ## 节点数据库
 
 `/ecdsa/keys` 和 `/frost/keys` 使用各节点 `dataDir` 下的 `node.sqlite`。默认路径为 `data/node-1/node.sqlite`、`data/node-2/node.sqlite` 和 `data/node-3/node.sqlite`。数据库会记录所属节点，拒绝用其他节点 ID 打开。

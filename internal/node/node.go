@@ -23,22 +23,29 @@ type shareStore interface {
 	ConsumeFROSTPresign(context.Context, string, string) (keystore.Presignature, error)
 	CountPresign(context.Context, string) (int, error)
 	DeletePresign(context.Context, string) error
+	ReserveReshare(context.Context, keystore.Reshare) (keystore.Reservation, keystore.ReshareState, error)
+	LoadReshare(context.Context, keystore.Reshare) (keystore.ReshareState, error)
+	PendingReshare(context.Context, string, string) (bool, error)
+	StageReshare(context.Context, keystore.Reshare, [32]byte, []byte) error
+	CommitReshare(context.Context, keystore.Reshare) error
 }
 
 type node struct {
-	config   config.Config
-	logger   *slog.Logger
-	client   *http.Client
-	mu       sync.Mutex
-	sessions map[string]*keygenSession
-	keys     shareStore
+	config        config.Config
+	logger        *slog.Logger
+	client        *http.Client
+	mu            sync.Mutex
+	sessions      map[string]*keygenSession
+	keyOperations map[string]int
+	keys          shareStore
 }
 
 func newNode(cfg config.Config) *node {
 	return &node{
-		config:   cfg,
-		logger:   slog.Default(),
-		client:   &http.Client{Timeout: 2 * time.Second},
-		sessions: make(map[string]*keygenSession),
+		config:        cfg,
+		logger:        slog.Default(),
+		client:        &http.Client{Timeout: 2 * time.Second},
+		sessions:      make(map[string]*keygenSession),
+		keyOperations: make(map[string]int),
 	}
 }

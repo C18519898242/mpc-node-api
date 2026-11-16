@@ -37,6 +37,11 @@ func (n *node) signFROST(w http.ResponseWriter, r *http.Request) {
 	if signers == nil {
 		return
 	}
+	release := n.lockSigningKey(w, r, "frost", keyID)
+	if release == nil {
+		return
+	}
+	defer release()
 
 	roster, ids, frostIDs := n.frostRoster()
 	share, err := n.loadFROSTSigningShare(r.Context(), keyID, ids[n.config.PartyID], frostIDs)

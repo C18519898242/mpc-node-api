@@ -83,6 +83,11 @@ func (n *node) generatePresign(w http.ResponseWriter, r *http.Request, algorithm
 	if signers == nil {
 		return
 	}
+	release := n.lockSigningKey(w, r, algorithm, keyID)
+	if release == nil {
+		return
+	}
+	defer release()
 	generate, err := prepare(r.Context(), keyID, signers)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -120,6 +125,8 @@ func (n *node) generatePresign(w http.ResponseWriter, r *http.Request, algorithm
 	}
 	select {
 	case <-r.Context().Done():
+		// The detached MPC worker still owns material from this key generation.
+		<-session.done
 		return
 	case <-session.done:
 		if session.status.State != "succeeded" || len(session.presignIDs) != int(count) {
@@ -148,6 +155,7 @@ func (n *node) beginPresign(ctx context.Context, id, keyID string, binding [32]b
 	}
 	session := &keygenSession{
 		status: keygenStatus{State: "running"}, done: make(chan struct{}), signBinding: binding,
+		key: keystore.Key{Algorithm: algorithm, KeyID: keyID},
 	}
 	if outcome == keystore.Completed {
 		session.status.State = "succeeded"
