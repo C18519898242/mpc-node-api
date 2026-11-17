@@ -9,6 +9,7 @@ import (
 
 	"github.com/C18519898242/mpc-node-api/internal/config"
 	"github.com/C18519898242/mpc-node-api/internal/keystore"
+	"github.com/taurusgroup/multi-party-sig/pkg/party"
 )
 
 type shareStore interface {
@@ -35,6 +36,8 @@ type node struct {
 	config        config.Config
 	logger        *slog.Logger
 	client        *http.Client
+	peerClients   map[party.ID]*http.Client
+	peerNames     map[string]party.ID
 	mu            sync.Mutex
 	sessions      map[string]*keygenSession
 	keyOperations map[string]int

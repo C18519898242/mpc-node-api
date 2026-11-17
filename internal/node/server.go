@@ -32,6 +32,14 @@ func httpServer(addr string, handler http.Handler) *http.Server {
 // Serve runs the REST and peer listeners for a single node.
 func Serve(cfg config.Config) error {
 	n := newNode(cfg)
+	tlsConfig, err := n.configurePeerTLS()
+	if err != nil {
+		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "mpc_tls")
+		return err
+	}
+	for _, client := range n.peerClients {
+		defer client.CloseIdleConnections()
+	}
 	keys, err := keystore.OpenNodeSQLite(cfg.DataDir, string(cfg.PartyID))
 	if err != nil {
 		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "storage")
@@ -56,7 +64,15 @@ func Serve(cfg config.Config) error {
 	restServer := httpServer(n.config.RESTAddr, n.restHandler())
 	restServer.WriteTimeout = keygenTimeout + restServer.ReadTimeout + 5*time.Second
 	go func() { serveErrors <- restServer.Serve(rest) }()
-	go func() { serveErrors <- httpServer(n.config.MPCAddr, n.peerHandler()).Serve(mpc) }()
+	peerServer := httpServer(n.config.MPCAddr, n.peerHandler())
+	go func() {
+		if tlsConfig == nil {
+			serveErrors <- peerServer.Serve(mpc)
+			return
+		}
+		peerServer.TLSConfig = tlsConfig
+		serveErrors <- peerServer.ServeTLS(mpc, "", "")
+	}()
 	n.logger.Info("node listening", "node_id", string(cfg.PartyID), "rest_port", rest.Addr().(*net.TCPAddr).Port,
 		"mpc_port", mpc.Addr().(*net.TCPAddr).Port)
 	return <-serveErrors

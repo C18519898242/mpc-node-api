@@ -175,8 +175,7 @@ func (n *node) runKeyCopy(ctx context.Context, key keystore.Key, route, sourceID
 		if player == n.config.PartyID {
 			continue
 		}
-		addr := n.config.Peers[player]
-		if err := n.deliverMessage(ctx, "http://"+addr+"/internal/keycopy/"+route+"/ready", body); err != nil {
+		if err := n.deliverMessage(ctx, player, "/internal/keycopy/"+route+"/ready", body); err != nil {
 			return "confirmation", err
 		}
 	}
@@ -196,6 +195,11 @@ func (n *node) keyCopyReady(w http.ResponseWriter, r *http.Request) {
 	session := n.sessions[route]
 	var digest *[32]byte
 	if session != nil && session.key.KeyID == request.KeyID {
+		if n.config.MPCTLS != nil && !session.players.Contains(n.verifiedPeer(r)) {
+			n.mu.Unlock()
+			http.Error(w, "peer is not in the key copy session", http.StatusForbidden)
+			return
+		}
 		digest = session.copyDigest
 	}
 	n.mu.Unlock()

@@ -1,3 +1,5 @@
 /data/
+/certs/
+*.key
 /mpc-node-api.exe
 /mpc-node-api

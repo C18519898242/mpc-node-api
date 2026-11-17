@@ -6,5 +6,10 @@
   "peers": {
     "2": "127.0.0.1:9082",
     "3": "127.0.0.1:9083"
+  },
+  "mpcTLS": {
+    "caFile": "../certs/mpc-dev/ca.crt",
+    "certFile": "../certs/mpc-dev/node-1/node.crt",
+    "keyFile": "../certs/mpc-dev/node-1/node.key"
   }
 }

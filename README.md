@@ -12,9 +12,10 @@
 
 ## Windows 三节点联调
 
-在仓库根目录运行以下命令。脚本编译一次并启动三个独立进程，使用 `-Configs` 可以指定三份 JSON 配置。按 Ctrl+C 停止。
+在仓库根目录首次运行证书生成命令，然后启动三个节点。启动脚本默认使用 `configs/node-*.json`。按 Ctrl+C 停止。
 
 ```powershell
+.\scripts\gen-mpc-certs.ps1
 .\scripts\dev-up.ps1
 .\scripts\dev-up.ps1 -Smoke
 ```
@@ -29,7 +30,7 @@
 
 单节点可用 `go run . -config configs/node-1.json` 启动。配置中的相对数据目录以配置文件所在目录为基准。
 
-这套配置用于本机联调，监听地址限制在回环接口。MPC 消息使用本地 HTTP。脚本的 `-Smoke` 调用旧的 `/v1/keygen`，分片以 CMP 二进制文件写入各节点的数据目录。只使用测试密钥。
+默认配置下，MPC 端口使用 TLS 1.3 双向认证，REST 端口使用回环 HTTP。`-Smoke` 调用旧的 `/v1/keygen`，分片以 CMP 二进制文件写入各节点的数据目录。只使用测试密钥。 [MPC mTLS 使用说明](docs/mtls/README.md)
 
 ## 节点版本与协议
 

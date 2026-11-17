@@ -138,8 +138,7 @@ func (n *node) runReshare(ctx context.Context, op keystore.Reshare, players part
 		if player == n.config.PartyID {
 			continue
 		}
-		addr := n.config.Peers[player]
-		if err := n.deliverMessage(ctx, "http://"+addr+"/internal/reshare/"+route+"/ready", body); err != nil {
+		if err := n.deliverMessage(ctx, player, "/internal/reshare/"+route+"/ready", body); err != nil {
 			return "confirmation", err
 		}
 	}
@@ -183,6 +182,20 @@ func (n *node) reshareReady(w http.ResponseWriter, r *http.Request) {
 	case !bytes.Equal(state.Digest, request.Digest):
 		http.Error(w, "reshare candidates disagree", http.StatusConflict)
 	default:
+		if n.config.MPCTLS != nil {
+			players, err := n.keyPlayers(r.Context(), algorithm, request.KeyID)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				http.NotFound(w, r)
+				return
+			case err != nil:
+				http.Error(w, "could not verify reshare players", http.StatusInternalServerError)
+				return
+			case !players.Contains(n.verifiedPeer(r)):
+				http.Error(w, "peer is not in the reshare session", http.StatusForbidden)
+				return
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

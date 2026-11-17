@@ -3,9 +3,12 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -19,7 +22,16 @@ func (n *node) peerHandler() http.Handler {
 	mux.HandleFunc("POST /internal/mpc/{sessionId}", n.receiveMessage)
 	mux.HandleFunc("POST /internal/reshare/{sessionId}/ready", n.reshareReady)
 	mux.HandleFunc("POST /internal/keycopy/{sessionId}/ready", n.keyCopyReady)
-	return mux
+	if n.config.MPCTLS == nil {
+		return mux
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n.verifiedPeer(r) == "" {
+			http.Error(w, "unverified MPC peer", http.StatusForbidden)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
@@ -29,6 +41,10 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 	if !validPeerSessionID(id) || decodeJSON(w, r, &message, 1<<20) != nil ||
 		n.config.Peers[message.From] == "" || !message.IsFor(n.config.PartyID) {
 		http.Error(w, "invalid MPC message", http.StatusBadRequest)
+		return
+	}
+	if n.config.MPCTLS != nil && n.verifiedPeer(r) != message.From {
+		http.Error(w, "MPC sender does not match certificate identity", http.StatusForbidden)
 		return
 	}
 
@@ -115,26 +131,37 @@ func (n *node) sendMessage(ctx context.Context, id string, message *protocol.Mes
 	if err != nil {
 		return err
 	}
-	for peer, addr := range n.config.Peers {
+	for peer := range n.config.Peers {
 		if !message.IsFor(peer) || (participants != nil && !participants.Contains(peer)) {
 			continue
 		}
-		url := "http://" + addr + "/internal/mpc/" + id
-		if err := n.deliverMessage(ctx, url, body); err != nil {
+		if err := n.deliverMessage(ctx, peer, "/internal/mpc/"+id, body); err != nil {
 			return fmt.Errorf("send to node %s: %w", peer, err)
 		}
 	}
 	return nil
 }
 
-func (n *node) deliverMessage(ctx context.Context, url string, body []byte) error {
+func (n *node) deliverMessage(ctx context.Context, peer party.ID, path string, body []byte) error {
+	client, scheme := n.client, "http"
+	if n.config.MPCTLS != nil {
+		client, scheme = n.peerClients[peer], "https"
+		if client == nil {
+			return errors.New("MPC peer has no TLS configuration")
+		}
+	}
+	endpoint := url.URL{Scheme: scheme, Host: n.config.Peers[peer], Path: path}
 	for {
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
 		if err != nil {
 			return err
 		}
 		request.Header.Set("Content-Type", "application/json")
-		response, err := n.client.Do(request)
+		response, err := client.Do(request)
+		var certificateError *tls.CertificateVerificationError
+		if errors.As(err, &certificateError) {
+			return err
+		}
 		if err == nil {
 			response.Body.Close()
 			switch response.StatusCode {
