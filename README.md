@@ -31,6 +31,19 @@
 
 这套配置用于本机联调，监听地址限制在回环接口。MPC 消息使用本地 HTTP。脚本的 `-Smoke` 调用旧的 `/v1/keygen`，分片以 CMP 二进制文件写入各节点的数据目录。只使用测试密钥。
 
+## 节点版本与协议
+
+使用 `-config` 启动节点后，`GET /version` 返回服务主版本 `{"version":"1"}`。通过 `GET /info/protocols` 可查询该节点注册的 MPC 协议。
+
+```json
+{
+  "ecdsa": { "name": "cmp", "curve": "secp256k1", "version": 1 },
+  "frost": { "name": "frost", "curve": "ed25519", "version": 1 }
+}
+```
+
+协议对象的 `version` 标识节点间 MPC 消息的兼容版本，由实现统一声明。节点配置文件继续管理本地端口、数据目录和对端节点。Blockdaemon Go SDK 的同名接口使用整数协议编号，直接调用本接口的客户端应按上面的对象结构解析。
+
 ## ECDSA 建钥接口
 
 `POST /ecdsa/keys?mpc_routing_id=<routingID>`。对 `MPC-Players` 指定的节点并发发送同一份 JSON 和会话头。
