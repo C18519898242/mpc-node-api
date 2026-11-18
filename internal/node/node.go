@@ -13,23 +13,23 @@ import (
 )
 
 type shareStore interface {
-	Reserve(context.Context, keystore.Key) (keystore.Reservation, error)
-	Save(context.Context, keystore.Key, []byte) error
-	Load(context.Context, string, string) ([]byte, error)
-	DeleteKeyShare(context.Context, string) error
-	ReserveECDSAPresign(context.Context, string, string, [32]byte) (keystore.Reservation, []string, error)
-	SaveECDSAPresign(context.Context, string, []keystore.Presignature) ([]string, error)
-	ReserveFROSTPresign(context.Context, string, string, [32]byte) (keystore.Reservation, []string, error)
-	SaveFROSTPresign(context.Context, string, []keystore.Presignature) ([]string, error)
-	ConsumeECDSAPresign(context.Context, string, string) (keystore.Presignature, error)
-	ConsumeFROSTPresign(context.Context, string, string) (keystore.Presignature, error)
-	CountPresign(context.Context, string) (int, error)
-	DeletePresign(context.Context, string) error
-	ReserveReshare(context.Context, keystore.Reshare) (keystore.Reservation, keystore.ReshareState, error)
-	LoadReshare(context.Context, keystore.Reshare) (keystore.ReshareState, error)
-	PendingReshare(context.Context, string, string) (bool, error)
-	StageReshare(context.Context, keystore.Reshare, [32]byte, []byte) error
-	CommitReshare(context.Context, keystore.Reshare) error
+	Reserve(context.Context, string, keystore.Key) (keystore.Reservation, error)
+	Save(context.Context, string, keystore.Key, []byte) error
+	Load(context.Context, string, string, string) ([]byte, error)
+	DeleteKeyShare(context.Context, string, string) error
+	ReserveECDSAPresign(context.Context, string, string, string, [32]byte) (keystore.Reservation, []string, error)
+	SaveECDSAPresign(context.Context, string, string, []keystore.Presignature) ([]string, error)
+	ReserveFROSTPresign(context.Context, string, string, string, [32]byte) (keystore.Reservation, []string, error)
+	SaveFROSTPresign(context.Context, string, string, []keystore.Presignature) ([]string, error)
+	ConsumeECDSAPresign(context.Context, string, string, string) (keystore.Presignature, error)
+	ConsumeFROSTPresign(context.Context, string, string, string) (keystore.Presignature, error)
+	CountPresign(context.Context, string, string) (int, error)
+	DeletePresign(context.Context, string, string) error
+	ReserveReshare(context.Context, string, keystore.Reshare) (keystore.Reservation, keystore.ReshareState, error)
+	LoadReshare(context.Context, string, keystore.Reshare) (keystore.ReshareState, error)
+	PendingReshare(context.Context, string, string, string) (bool, error)
+	StageReshare(context.Context, string, keystore.Reshare, [32]byte, []byte) error
+	CommitReshare(context.Context, string, keystore.Reshare) error
 }
 
 type node struct {
@@ -38,12 +38,11 @@ type node struct {
 	client        *http.Client
 	peerClients   map[party.ID]*http.Client
 	peerNames     map[string]party.ID
-	applicationID string
-	applications  map[string]*node
+	applications  map[string]struct{}
 	credentials   []apiKeyCredential
 	mu            sync.Mutex
-	sessions      map[string]*keygenSession
-	keyOperations map[string]int
+	sessions      map[sessionKey]*keygenSession
+	keyOperations map[keyOperation]int
 	keys          shareStore
 }
 
@@ -52,7 +51,7 @@ func newNode(cfg config.Config) *node {
 		config:        cfg,
 		logger:        slog.Default(),
 		client:        &http.Client{Timeout: 2 * time.Second},
-		sessions:      make(map[string]*keygenSession),
-		keyOperations: make(map[string]int),
+		sessions:      make(map[sessionKey]*keygenSession),
+		keyOperations: make(map[keyOperation]int),
 	}
 }

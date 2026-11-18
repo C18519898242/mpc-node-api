@@ -19,13 +19,13 @@ func (n *node) deleteKeyShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, algorithm := range []string{"ecdsa", "frost"} {
-		release := n.lockKeyOperation(w, algorithm, keyID, true)
+		release := n.lockKeyOperation(w, applicationID(r.Context()), algorithm, keyID, true)
 		if release == nil {
 			return
 		}
 		defer release()
 	}
-	switch err := n.keys.DeleteKeyShare(r.Context(), keyID); {
+	switch err := n.keys.DeleteKeyShare(r.Context(), applicationID(r.Context()), keyID); {
 	case errors.Is(err, sql.ErrNoRows):
 		http.NotFound(w, r)
 	case err != nil:
@@ -33,7 +33,7 @@ func (n *node) deleteKeyShare(w http.ResponseWriter, r *http.Request) {
 	default:
 		n.mu.Lock()
 		for id, session := range n.sessions {
-			if session.key.KeyID == keyID {
+			if id.applicationID == applicationID(r.Context()) && session.key.KeyID == keyID {
 				delete(n.sessions, id)
 			}
 		}

@@ -11,5 +11,17 @@
     "caFile": "../certs/mpc-dev/ca.crt",
     "certFile": "../certs/mpc-dev/node-2/node.crt",
     "keyFile": "../certs/mpc-dev/node-2/node.key"
+  },
+  "restAuth": {
+    "apiKeys": [
+      {
+        "applicationID": "default",
+        "sha256": "dShJSJTE+rsuBU8f0uzZvU2M9L5amb+MmEzRcakE9qg="
+      },
+      {
+        "applicationID": "wallet-a",
+        "sha256": "zKGfxNoJcfX1ldbxo+93MLe0leevI18tb6nZUDQ8nl8="
+      }
+    ]
   }
 }

@@ -105,7 +105,7 @@ func canFROSTSign(share *storedFROSTShare, signers party.IDSlice) bool {
 }
 
 func (n *node) loadFROSTSigningShare(ctx context.Context, keyID string) (*storedFROSTShare, error) {
-	data, err := n.keys.Load(ctx, "frost", keyID)
+	data, err := n.keys.Load(ctx, applicationID(ctx), "frost", keyID)
 	if err != nil {
 		return nil, err
 	}

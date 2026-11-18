@@ -59,7 +59,7 @@ func (n *node) generateKey(w http.ResponseWriter, r *http.Request, prefix, curve
 	key := keystore.Key{
 		Algorithm: prefix[:len(prefix)-1], SessionID: sessionID, KeyID: request.KeyID, Threshold: request.Threshold,
 	}
-	release := n.lockKeyOperation(w, key.Algorithm, key.KeyID, false)
+	release := n.lockKeyOperation(w, applicationID(r.Context()), key.Algorithm, key.KeyID, false)
 	if release == nil {
 		return
 	}
@@ -97,13 +97,13 @@ func mpcRoutingID(sessionID string) string {
 func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Key, players party.IDSlice, generate generateShare) (*keygenSession, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if session := n.sessions[id]; session != nil {
+	if session := n.sessions[sessionKey{applicationID(ctx), id}]; session != nil {
 		if session.key == key && slices.Equal(session.players, players) {
 			return session, nil
 		}
 		return nil, nil
 	}
-	outcome, err := n.keys.Reserve(ctx, key)
+	outcome, err := n.keys.Reserve(ctx, applicationID(ctx), key)
 	if err != nil || outcome == keystore.Conflict {
 		return nil, err
 	}
@@ -123,21 +123,21 @@ func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Ke
 		close(session.done)
 		return session, nil
 	}
-	n.sessions[id] = session
-	go n.runStoredKeygen(id, session, generate)
+	n.sessions[sessionKey{applicationID(ctx), id}] = session
+	go n.runStoredKeygen(context.WithoutCancel(ctx), id, session, generate)
 	return session, nil
 }
 
-func (n *node) runStoredKeygen(id string, session *keygenSession, generate generateShare) {
+func (n *node) runStoredKeygen(ctx context.Context, id string, session *keygenSession, generate generateShare) {
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), keygenTimeout)
+	ctx, cancel := context.WithTimeout(ctx, keygenTimeout)
 	defer cancel()
 	share, err := generate(ctx, id, session)
 	defer clear(share)
 	stage := "protocol"
 	if err == nil {
 		stage = "storage"
-		err = n.keys.Save(ctx, session.key, share)
+		err = n.keys.Save(ctx, applicationID(ctx), session.key, share)
 	}
 	n.logMPCResult("keygen", session.key.Algorithm, stage, start, err)
 	n.mu.Lock()

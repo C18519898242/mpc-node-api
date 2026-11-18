@@ -22,8 +22,8 @@ var errPresignRoster = errors.New("players do not satisfy the key threshold or r
 
 type generatePresignSlot func(context.Context, string, [32]byte, <-chan *protocol.Message) (keystore.Presignature, error)
 type preparePresign func(context.Context, string, party.IDSlice) (generatePresignSlot, error)
-type reservePresign func(context.Context, string, string, [32]byte) (keystore.Reservation, []string, error)
-type savePresign func(context.Context, string, []keystore.Presignature) ([]string, error)
+type reservePresign func(context.Context, string, string, string, [32]byte) (keystore.Reservation, []string, error)
+type savePresign func(context.Context, string, string, []keystore.Presignature) ([]string, error)
 
 func (n *node) countPresign(w http.ResponseWriter, r *http.Request) {
 	keyID := r.PathValue("keyID")
@@ -32,7 +32,7 @@ func (n *node) countPresign(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid presign count request", http.StatusBadRequest)
 		return
 	}
-	count, err := n.keys.CountPresign(r.Context(), keyID)
+	count, err := n.keys.CountPresign(r.Context(), applicationID(r.Context()), keyID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		http.NotFound(w, r)
@@ -55,7 +55,7 @@ func (n *node) deletePresign(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "presign delete request body must be empty", http.StatusBadRequest)
 		return
 	}
-	switch err := n.keys.DeletePresign(r.Context(), keyID); {
+	switch err := n.keys.DeletePresign(r.Context(), applicationID(r.Context()), keyID); {
 	case errors.Is(err, sql.ErrNoRows):
 		http.NotFound(w, r)
 	case err != nil:
@@ -143,13 +143,13 @@ func (n *node) generatePresign(w http.ResponseWriter, r *http.Request, algorithm
 func (n *node) beginPresign(ctx context.Context, id, keyID string, binding [32]byte, count int, algorithm string, generate generatePresignSlot, reserve reservePresign, save savePresign) (*keygenSession, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if session := n.sessions[id]; session != nil {
+	if session := n.sessions[sessionKey{applicationID(ctx), id}]; session != nil {
 		if session.signBinding == binding {
 			return session, nil
 		}
 		return nil, nil
 	}
-	outcome, ids, err := reserve(ctx, id, keyID, binding)
+	outcome, ids, err := reserve(ctx, applicationID(ctx), id, keyID, binding)
 	if err != nil || outcome == keystore.Conflict {
 		return nil, err
 	}
@@ -167,14 +167,14 @@ func (n *node) beginPresign(ctx context.Context, id, keyID string, binding [32]b
 	for i := range session.presignInboxes {
 		session.presignInboxes[i] = make(chan *protocol.Message, 32)
 	}
-	n.sessions[id] = session
-	go n.runPresign(id, session, algorithm, generate, save)
+	n.sessions[sessionKey{applicationID(ctx), id}] = session
+	go n.runPresign(context.WithoutCancel(ctx), id, session, algorithm, generate, save)
 	return session, nil
 }
 
-func (n *node) runPresign(id string, session *keygenSession, algorithm string, generate generatePresignSlot, save savePresign) {
+func (n *node) runPresign(ctx context.Context, id string, session *keygenSession, algorithm string, generate generatePresignSlot, save savePresign) {
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), keygenTimeout)
+	ctx, cancel := context.WithTimeout(ctx, keygenTimeout)
 	defer cancel()
 	shares := make([]keystore.Presignature, 0, len(session.presignInboxes))
 	defer func() {
@@ -198,7 +198,7 @@ func (n *node) runPresign(id string, session *keygenSession, algorithm string, g
 	}
 	if err == nil {
 		stage = "storage"
-		ids, err = save(ctx, id, shares)
+		ids, err = save(ctx, applicationID(ctx), id, shares)
 	}
 	n.logMPCResult("presiggen", algorithm, stage, start, err)
 	n.mu.Lock()

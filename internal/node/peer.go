@@ -19,16 +19,9 @@ import (
 
 func (n *node) peerHandler() http.Handler {
 	mux := http.NewServeMux()
-	if n.config.RESTAuth != nil {
-		for id, app := range n.applications {
-			prefix := peerApplicationPath + id
-			mux.Handle(prefix+"/", http.StripPrefix(prefix, app.peerHandler()))
-		}
-	} else {
-		mux.HandleFunc("POST /internal/mpc/{sessionId}", n.receiveMessage)
-		mux.HandleFunc("POST /internal/reshare/{sessionId}/ready", n.reshareReady)
-		mux.HandleFunc("POST /internal/keycopy/{sessionId}/ready", n.keyCopyReady)
-	}
+	n.registerPeerRoute(mux, "/internal/mpc/{sessionId}", n.receiveMessage)
+	n.registerPeerRoute(mux, "/internal/reshare/{sessionId}/ready", n.reshareReady)
+	n.registerPeerRoute(mux, "/internal/keycopy/{sessionId}/ready", n.keyCopyReady)
 	if n.config.MPCTLS == nil {
 		return mux
 	}
@@ -38,6 +31,21 @@ func (n *node) peerHandler() http.Handler {
 			return
 		}
 		mux.ServeHTTP(w, r)
+	})
+}
+
+func (n *node) registerPeerRoute(mux *http.ServeMux, path string, handler http.HandlerFunc) {
+	if n.config.RESTAuth == nil {
+		mux.HandleFunc("POST "+path, handler)
+		return
+	}
+	mux.HandleFunc("POST "+peerApplicationPath+"{applicationID}"+path, func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("applicationID")
+		if _, allowed := n.applications[id]; !allowed {
+			http.NotFound(w, r)
+			return
+		}
+		handler(w, withApplication(r, id))
 	})
 }
 
@@ -57,7 +65,7 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	session := n.sessions[batchID]
+	session := n.sessions[sessionKey{applicationID(r.Context()), batchID}]
 	if session == nil {
 		http.Error(w, "waiting for local MPC request", http.StatusNotFound)
 		return
@@ -157,8 +165,8 @@ func (n *node) deliverMessage(ctx context.Context, peer party.ID, path string, b
 			return errors.New("MPC peer has no TLS configuration")
 		}
 	}
-	if n.applicationID != "" {
-		path = peerApplicationPath + n.applicationID + path
+	if n.config.RESTAuth != nil {
+		path = peerApplicationPath + applicationID(ctx) + path
 	}
 	endpoint := url.URL{Scheme: scheme, Host: n.config.Peers[peer], Path: path}
 	for {

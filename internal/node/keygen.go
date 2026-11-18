@@ -16,6 +16,11 @@ import (
 
 const keygenTimeout = 3 * time.Minute
 
+type sessionKey struct {
+	applicationID string
+	sessionID     string
+}
+
 type keygenSession struct {
 	incoming       chan *protocol.Message
 	copyIncoming   chan *protocol.Message
@@ -37,48 +42,48 @@ type keygenStatus struct {
 	PublicKey string `json:"publicKey,omitempty"`
 }
 
-func (n *node) beginKeygen(id string) (status keygenStatus, started bool, err error) {
+func (n *node) beginKeygen(ctx context.Context, id string) (status keygenStatus, started bool, err error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	status, err = n.lookupKeygen(id)
+	status, err = n.lookupKeygen(ctx, id)
 	if err == nil {
 		return status, false, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return keygenStatus{}, false, err
 	}
-	if err := n.recordKeygenAttempt(id); err != nil {
+	if err := n.recordKeygenAttempt(applicationID(ctx), id); err != nil {
 		return keygenStatus{}, false, fmt.Errorf("%w: %w", errRecordKeygenAttempt, err)
 	}
 	session := &keygenSession{
 		incoming: make(chan *protocol.Message, 32),
 		status:   keygenStatus{SessionID: id, State: "running"},
 	}
-	n.sessions[id] = session
-	go n.runKeygen(id, session)
+	n.sessions[sessionKey{applicationID(ctx), id}] = session
+	go n.runKeygen(context.WithoutCancel(ctx), id, session)
 	return session.status, true, nil
 }
 
 var errRecordKeygenAttempt = errors.New("record keygen attempt")
 
-func (n *node) getKeygenStatus(id string) (keygenStatus, error) {
+func (n *node) getKeygenStatus(ctx context.Context, id string) (keygenStatus, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.lookupKeygen(id)
+	return n.lookupKeygen(ctx, id)
 }
 
 // lookupKeygen requires n.mu to be held.
-func (n *node) lookupKeygen(id string) (keygenStatus, error) {
-	if session, ok := n.sessions[id]; ok {
+func (n *node) lookupKeygen(ctx context.Context, id string) (keygenStatus, error) {
+	if session, ok := n.sessions[sessionKey{applicationID(ctx), id}]; ok {
 		return session.status, nil
 	}
-	return n.loadKeygenStatus(id)
+	return n.loadKeygenStatus(applicationID(ctx), id)
 }
 
-func (n *node) runKeygen(id string, session *keygenSession) {
+func (n *node) runKeygen(ctx context.Context, id string, session *keygenSession) {
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), keygenTimeout)
+	ctx, cancel := context.WithTimeout(ctx, keygenTimeout)
 	defer cancel()
 
 	share, err := n.executeKeygen(ctx, id, []byte(id), 2, n.configuredPlayers(), session.incoming)
@@ -86,7 +91,7 @@ func (n *node) runKeygen(id string, session *keygenSession) {
 	stage := "protocol"
 	if err == nil {
 		stage = "storage"
-		status, err = n.saveShare(id, share)
+		status, err = n.saveShare(applicationID(ctx), id, share)
 	}
 	n.logMPCResult("keygen", "ecdsa", stage, start, err)
 	n.mu.Lock()
@@ -116,7 +121,7 @@ func (n *node) executeKeygen(ctx context.Context, id string, protocolID []byte, 
 }
 
 func (n *node) runCMP(ctx context.Context, id string, protocolID []byte, start protocol.StartFunc, incoming <-chan *protocol.Message, participants party.IDSlice) (any, error) {
-	handler, err := protocol.NewMultiHandler(start, n.applicationBinding(protocolID))
+	handler, err := protocol.NewMultiHandler(start, applicationBinding(applicationID(ctx), protocolID))
 	if err != nil {
 		return nil, err
 	}

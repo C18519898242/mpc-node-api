@@ -23,7 +23,7 @@ import (
 
 type failingReshareCommit struct{ shareStore }
 
-func (failingReshareCommit) CommitReshare(context.Context, keystore.Reshare) error {
+func (failingReshareCommit) CommitReshare(context.Context, string, keystore.Reshare) error {
 	return errors.New("simulated reshare commit failure")
 }
 
@@ -112,7 +112,7 @@ func TestReshare(t *testing.T) {
 			old := make([][]byte, len(nodes))
 			for i, n := range nodes {
 				var err error
-				old[i], err = n.keys.Load(ctx, tc.algorithm, "refresh-key")
+				old[i], err = n.keys.Load(ctx, keystore.DefaultApplication, tc.algorithm, "refresh-key")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -161,7 +161,7 @@ func TestReshare(t *testing.T) {
 			all(key+"/reshare", "refresh", nil, 204)
 			all(key+"/reshare", "refresh", nil, 204)
 			for i, n := range nodes {
-				refreshed, err := n.keys.Load(ctx, tc.algorithm, "refresh-key")
+				refreshed, err := n.keys.Load(ctx, keystore.DefaultApplication, tc.algorithm, "refresh-key")
 				if err != nil || bytes.Equal(old[i], refreshed) ||
 					!bytes.Equal(rootKey, pub(n, root)) || !bytes.Equal(childKey, pub(n, child)) {
 					t.Fatal("unexpected share or public key after refresh")
@@ -170,7 +170,7 @@ func TestReshare(t *testing.T) {
 				if tc.algorithm == "ecdsa" {
 					consume = n.keys.ConsumeECDSAPresign
 				}
-				if _, err := consume(ctx, "refresh-key", ids.IDs[0]); !errors.Is(err, sql.ErrNoRows) {
+				if _, err := consume(ctx, defaultApplication, "refresh-key", ids.IDs[0]); !errors.Is(err, sql.ErrNoRows) {
 					t.Fatalf("obsolete presignature is available: %v", err)
 				}
 			}

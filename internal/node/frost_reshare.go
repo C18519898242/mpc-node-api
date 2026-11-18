@@ -47,7 +47,7 @@ func (n *node) refreshFROST(ctx context.Context, keyID, route string, session *k
 		return nil, epoch, err
 	}
 	binding := sha256.Sum256(append([]byte(route+":"+keyID+":"), public...))
-	copy(binding[:], n.applicationBinding(binding[:]))
+	copy(binding[:], applicationBinding(applicationID(ctx), binding[:]))
 	send := func(toIndex int, kind string, data []byte) error {
 		msg := &protocol.Message{SSID: binding[:], From: n.config.PartyID, Protocol: kind, Data: data}
 		if toIndex >= 0 {

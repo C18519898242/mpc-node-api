@@ -22,9 +22,6 @@ func healthMux() *http.ServeMux {
 }
 
 func (n *node) restHandler() http.Handler {
-	if n.config.RESTAuth != nil {
-		return n.authenticatedRESTHandler()
-	}
 	mux := healthMux()
 	n.registerProtocols(mux)
 	mux.HandleFunc("POST /key/{keyID}/count/presigs", n.logRequest("countpresigs", "key", n.countPresign))
@@ -32,6 +29,9 @@ func (n *node) restHandler() http.Handler {
 	mux.HandleFunc("DELETE /key/{keyID}/presigs", n.logRequest("deletepresigs", "key", n.deletePresign))
 	mux.HandleFunc("POST /v1/keygen", n.logRequest("keygen", "ecdsa", n.startKeygen))
 	mux.HandleFunc("GET /v1/sessions/{sessionId}", n.getKeygen)
+	if n.config.RESTAuth != nil {
+		return n.requireAPIKey(mux)
+	}
 	return mux
 }
 
@@ -44,7 +44,7 @@ func (n *node) startKeygen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, started, err := n.beginKeygen(request.SessionID)
+	status, started, err := n.beginKeygen(r.Context(), request.SessionID)
 	switch {
 	case errors.Is(err, errRecordKeygenAttempt):
 		http.Error(w, "could not record keygen attempt", http.StatusInternalServerError)
@@ -63,7 +63,7 @@ func (n *node) getKeygen(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid sessionId", http.StatusBadRequest)
 		return
 	}
-	status, err := n.getKeygenStatus(id)
+	status, err := n.getKeygenStatus(r.Context(), id)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		http.NotFound(w, r)

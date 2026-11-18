@@ -56,7 +56,7 @@ func (n *node) signWithECDSAPresign(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid BIP32 derivation path", http.StatusBadRequest)
 		return
 	}
-	record, err := n.keys.ConsumeECDSAPresign(r.Context(), keyID, request.PresignatureID)
+	record, err := n.keys.ConsumeECDSAPresign(r.Context(), applicationID(r.Context()), keyID, request.PresignatureID)
 	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "presignature unavailable", http.StatusNotFound)
 		return

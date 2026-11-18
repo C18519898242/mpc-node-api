@@ -16,11 +16,11 @@ import (
 
 type failingLogStore struct{ shareStore }
 
-func (failingLogStore) PendingReshare(context.Context, string, string) (bool, error) {
+func (failingLogStore) PendingReshare(context.Context, string, string, string) (bool, error) {
 	return false, nil
 }
 
-func (failingLogStore) Load(context.Context, string, string) ([]byte, error) {
+func (failingLogStore) Load(context.Context, string, string, string) ([]byte, error) {
 	return nil, errors.New("sensitive-storage-error")
 }
 
@@ -50,7 +50,7 @@ func TestSignProtocolFailureDoesNotLogPeerError(t *testing.T) {
 	var logs bytes.Buffer
 	n := newNode(config.Config{PartyID: "1"})
 	n.logger = slog.New(slog.NewJSONHandler(&logs, nil))
-	session := n.beginSign("frost-sign.sensitive-session", [32]byte{}, func(context.Context, *keygenSession) ([]byte, error) {
+	session := n.beginSign(context.Background(), "frost-sign.sensitive-session", [32]byte{}, func(context.Context, *keygenSession) ([]byte, error) {
 		return nil, errors.New("sensitive-peer-error")
 	})
 	<-session.done

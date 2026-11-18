@@ -16,13 +16,13 @@ import (
 )
 
 func TestRESTApplicationIsolation(t *testing.T) {
-	nodes := make([]*node, 2)
+	rest := make([]http.Handler, 2)
 	peers := localPeerTransport{}
 	token := func(app string, player int) string {
 		sum := sha256.Sum256([]byte(fmt.Sprintf("test fixture %s on node %d", app, player)))
 		return base64.RawURLEncoding.EncodeToString(sum[:])
 	}
-	for i := range nodes {
+	for i := range rest {
 		cfg := config.Config{
 			PartyID: party.ID(fmt.Sprint(i + 1)), DataDir: t.TempDir(),
 			Peers:    map[party.ID]string{party.ID(fmt.Sprint(2 - i)): fmt.Sprintf("node%d", 2-i)},
@@ -45,17 +45,18 @@ func TestRESTApplicationIsolation(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = db.Close() })
 		legacy := keystore.Key{Algorithm: "ecdsa", KeyID: "legacy", SessionID: "old", Threshold: 1}
-		if state, err := db.Reserve(t.Context(), legacy); err != nil || state != keystore.Reserved {
+		if state, err := db.Reserve(t.Context(), keystore.DefaultApplication, legacy); err != nil || state != keystore.Reserved {
 			t.Fatalf("could not seed the existing database: %v, %v", state, err)
 		}
-		if err := db.Save(t.Context(), legacy, []byte("legacy fixture")); err != nil {
+		if err := db.Save(t.Context(), keystore.DefaultApplication, legacy, []byte("legacy fixture")); err != nil {
 			t.Fatal(err)
 		}
 		n.client.Transport = peers
-		if err := n.configureApplications(db); err != nil {
+		n.keys = db
+		if err := n.configureRESTAuth(); err != nil {
 			t.Fatal(err)
 		}
-		nodes[i], peers[fmt.Sprintf("node%d", i+1)] = n, n.peerHandler()
+		rest[i], peers[fmt.Sprintf("node%d", i+1)] = n.restHandler(), n.peerHandler()
 	}
 
 	call := func(player int, method, path, credential, sid, body string) *httptest.ResponseRecorder {
@@ -73,7 +74,7 @@ func TestRESTApplicationIsolation(t *testing.T) {
 			r.Header.Add("MPC-Players", "2")
 		}
 		w := httptest.NewRecorder()
-		nodes[player-1].restHandler().ServeHTTP(w, r)
+		rest[player-1].ServeHTTP(w, r)
 		return w
 	}
 	for _, key := range []string{"", token("wallet-a", 2)} {
@@ -85,14 +86,14 @@ func TestRESTApplicationIsolation(t *testing.T) {
 		t.Fatalf("default application cannot access existing records: %d", w.Code)
 	}
 	postToPlayers := func(app, path, sid, body string) []*httptest.ResponseRecorder {
-		results := make(chan *httptest.ResponseRecorder, len(nodes))
-		for i := 1; i <= len(nodes); i++ {
+		results := make(chan *httptest.ResponseRecorder, len(rest))
+		for i := 1; i <= len(rest); i++ {
 			go func() {
 				results <- call(i, http.MethodPost, path, token(app, i), sid, body)
 			}()
 		}
-		responses := make([]*httptest.ResponseRecorder, 0, len(nodes))
-		for range nodes {
+		responses := make([]*httptest.ResponseRecorder, 0, len(rest))
+		for range rest {
 			responses = append(responses, <-results)
 		}
 		return responses

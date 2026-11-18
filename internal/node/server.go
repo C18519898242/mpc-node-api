@@ -46,7 +46,8 @@ func Serve(cfg config.Config) error {
 		return err
 	}
 	defer keys.Close()
-	if err := n.configureApplications(keys); err != nil {
+	n.keys = keys
+	if err := n.configureRESTAuth(); err != nil {
 		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "rest_auth")
 		return err
 	}

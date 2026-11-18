@@ -17,51 +17,51 @@ func TestSQLiteApplicationIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	wallets := []*SQLite{db.ForApplication("a"), db.ForApplication("b")}
+	wallets := []string{"a", "b"}
 	key := Key{Algorithm: "frost", SessionID: "same-session", KeyID: "same-key", Threshold: 2}
 	reshare := Reshare{Algorithm: key.Algorithm, SessionID: "same-reshare", KeyID: key.KeyID}
 	for _, wallet := range wallets {
-		if outcome, err := wallet.Reserve(ctx, key); err != nil || outcome != Reserved {
-			t.Fatalf("reserve key for %s: %v, %v", wallet.applicationID, outcome, err)
+		if outcome, err := db.Reserve(ctx, wallet, key); err != nil || outcome != Reserved {
+			t.Fatalf("reserve key for %s: %v, %v", wallet, outcome, err)
 		}
-		if err := wallet.Save(ctx, key, []byte(wallet.applicationID)); err != nil {
+		if err := db.Save(ctx, wallet, key, []byte(wallet)); err != nil {
 			t.Fatal(err)
 		}
-		presig := Presignature{ID: "same-presig", Share: []byte(wallet.applicationID)}
-		if outcome, _, err := wallet.ReserveFROSTPresign(ctx, "same-presig-session", key.KeyID, [32]byte{1}); err != nil || outcome != Reserved {
-			t.Fatalf("reserve presign for %s: %v, %v", wallet.applicationID, outcome, err)
+		presig := Presignature{ID: "same-presig", Share: []byte(wallet)}
+		if outcome, _, err := db.ReserveFROSTPresign(ctx, wallet, "same-presig-session", key.KeyID, [32]byte{1}); err != nil || outcome != Reserved {
+			t.Fatalf("reserve presign for %s: %v, %v", wallet, outcome, err)
 		}
-		if _, err := wallet.SaveFROSTPresign(ctx, "same-presig-session", []Presignature{presig}); err != nil {
+		if _, err := db.SaveFROSTPresign(ctx, wallet, "same-presig-session", []Presignature{presig}); err != nil {
 			t.Fatal(err)
 		}
-		if outcome, _, err := wallet.ReserveReshare(ctx, reshare); err != nil || outcome != Reserved {
-			t.Fatalf("reserve reshare for %s: %v, %v", wallet.applicationID, outcome, err)
+		if outcome, _, err := db.ReserveReshare(ctx, wallet, reshare); err != nil || outcome != Reserved {
+			t.Fatalf("reserve reshare for %s: %v, %v", wallet, outcome, err)
 		}
-		if err := wallet.StageReshare(ctx, reshare, [32]byte{1}, []byte(wallet.applicationID+"-refreshed")); err != nil {
+		if err := db.StageReshare(ctx, wallet, reshare, [32]byte{1}, []byte(wallet+"-refreshed")); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	a, b := wallets[0], wallets[1]
-	if err := a.CommitReshare(ctx, reshare); err != nil {
+	if err := db.CommitReshare(ctx, a, reshare); err != nil {
 		t.Fatal(err)
 	}
-	if share, err := a.Load(ctx, key.Algorithm, key.KeyID); err != nil || string(share) != "a-refreshed" {
+	if share, err := db.Load(ctx, a, key.Algorithm, key.KeyID); err != nil || string(share) != "a-refreshed" {
 		t.Fatalf("refreshed share: %q, %v", share, err)
 	}
-	if share, err := b.Load(ctx, key.Algorithm, key.KeyID); err != nil || string(share) != "b" {
+	if share, err := db.Load(ctx, b, key.Algorithm, key.KeyID); err != nil || string(share) != "b" {
 		t.Fatalf("wallet b share changed: %q, %v", share, err)
 	}
-	if err := a.DeleteKeyShare(ctx, key.KeyID); err != nil {
+	if err := db.DeleteKeyShare(ctx, a, key.KeyID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Load(ctx, key.Algorithm, key.KeyID); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := db.Load(ctx, DefaultApplication, key.Algorithm, key.KeyID); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("default app accessed wallet key: %v", err)
 	}
-	if pending, err := b.PendingReshare(ctx, key.Algorithm, key.KeyID); err != nil || !pending {
+	if pending, err := db.PendingReshare(ctx, b, key.Algorithm, key.KeyID); err != nil || !pending {
 		t.Fatalf("wallet b refresh lost: %v, %v", pending, err)
 	}
-	if presig, err := b.ConsumeFROSTPresign(ctx, key.KeyID, "same-presig"); err != nil || string(presig.Share) != "b" {
+	if presig, err := db.ConsumeFROSTPresign(ctx, b, key.KeyID, "same-presig"); err != nil || string(presig.Share) != "b" {
 		t.Fatalf("wallet b presign lost: %v", err)
 	}
 }
@@ -75,10 +75,10 @@ func TestSQLiteReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := Key{Algorithm: "frost", SessionID: "session", KeyID: "Key", Threshold: 2}
-	if outcome, err := store.Reserve(ctx, key); err != nil || outcome != Reserved {
+	if outcome, err := store.Reserve(ctx, DefaultApplication, key); err != nil || outcome != Reserved {
 		t.Fatalf("reserve = %v, %v", outcome, err)
 	}
-	if err := store.Save(ctx, key, []byte("test share")); err != nil {
+	if err := store.Save(ctx, DefaultApplication, key, []byte("test share")); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -89,14 +89,14 @@ func TestSQLiteReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if outcome, err := store.Reserve(ctx, key); err != nil || outcome != Completed {
+	if outcome, err := store.Reserve(ctx, DefaultApplication, key); err != nil || outcome != Completed {
 		t.Fatalf("replay = %v, %v", outcome, err)
 	}
-	if share, err := store.Load(ctx, key.Algorithm, key.KeyID); err != nil || !bytes.Equal(share, []byte("test share")) {
+	if share, err := store.Load(ctx, DefaultApplication, key.Algorithm, key.KeyID); err != nil || !bytes.Equal(share, []byte("test share")) {
 		t.Fatalf("saved share could not be loaded: %v", err)
 	}
 	key.SessionID = "other-session"
-	if outcome, err := store.Reserve(ctx, key); err != nil || outcome != Conflict {
+	if outcome, err := store.Reserve(ctx, DefaultApplication, key); err != nil || outcome != Conflict {
 		t.Fatalf("reuse key ID = %v, %v", outcome, err)
 	}
 	if other, err := OpenSQLite(path, "node-2"); err == nil {
@@ -133,7 +133,7 @@ func TestSQLiteRemovesCopySessionColumns(t *testing.T) {
 			WHERE name IN ('request_binding', 'copy_digest', 'copy_candidate')`).Scan(&columns); err != nil || columns != 0 {
 			t.Fatalf("obsolete copy columns: %d, %v", columns, err)
 		}
-		share, err := store.Load(context.Background(), "frost", "copy-key")
+		share, err := store.Load(context.Background(), DefaultApplication, "frost", "copy-key")
 		if err != nil || !bytes.Equal(share, []byte{0x12, 0x34}) {
 			t.Fatalf("completed copy lost: %v", err)
 		}
@@ -173,14 +173,14 @@ func TestSQLiteMigratesKeyShareIDsAndTimestamps(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = store.Close() })
 		key := Key{Algorithm: "ecdsa", SessionID: "saved", KeyID: "key-1", Threshold: 2}
-		if outcome, err := store.Reserve(ctx, key); err != nil || outcome != Completed {
+		if outcome, err := store.Reserve(ctx, DefaultApplication, key); err != nil || outcome != Completed {
 			t.Fatalf("completed replay = %v, %v", outcome, err)
 		}
-		if share, err := store.Load(ctx, key.Algorithm, key.KeyID); err != nil || !bytes.Equal(share, []byte{1, 2}) {
+		if share, err := store.Load(ctx, DefaultApplication, key.Algorithm, key.KeyID); err != nil || !bytes.Equal(share, []byte{1, 2}) {
 			t.Fatalf("legacy share did not survive migration: %v", err)
 		}
 		key = Key{Algorithm: "frost", SessionID: "pending", KeyID: "key-2", Threshold: 2}
-		if outcome, err := store.Reserve(ctx, key); err != nil || outcome != Conflict {
+		if outcome, err := store.Reserve(ctx, DefaultApplication, key); err != nil || outcome != Conflict {
 			t.Fatalf("incomplete replay = %v, %v", outcome, err)
 		}
 		var id int64
@@ -202,7 +202,7 @@ func TestSQLiteMigratesKeyShareIDsAndTimestamps(t *testing.T) {
 	}
 	defer store.Close()
 	key := Key{Algorithm: "frost", SessionID: "new", KeyID: "key-3", Threshold: 2}
-	if outcome, err := store.Reserve(ctx, key); err != nil || outcome != Reserved {
+	if outcome, err := store.Reserve(ctx, DefaultApplication, key); err != nil || outcome != Reserved {
 		t.Fatalf("new reservation = %v, %v", outcome, err)
 	}
 	var id int64
@@ -223,10 +223,10 @@ func TestSQLiteRejectsIncompleteSessionReplay(t *testing.T) {
 	}
 	defer store.Close()
 	key := Key{Algorithm: "ecdsa", SessionID: "attempt", KeyID: "key", Threshold: 1}
-	if outcome, err := store.Reserve(ctx, key); err != nil || outcome != Reserved {
+	if outcome, err := store.Reserve(ctx, DefaultApplication, key); err != nil || outcome != Reserved {
 		t.Fatalf("reserve = %v, %v", outcome, err)
 	}
-	if outcome, err := store.Reserve(ctx, key); err != nil || outcome != Conflict {
+	if outcome, err := store.Reserve(ctx, DefaultApplication, key); err != nil || outcome != Conflict {
 		t.Fatalf("incomplete replay = %v, %v", outcome, err)
 	}
 }

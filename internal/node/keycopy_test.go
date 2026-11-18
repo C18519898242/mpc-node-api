@@ -23,7 +23,7 @@ import (
 
 type failingKeyCopyCommit struct{ shareStore }
 
-func (failingKeyCopyCommit) Save(context.Context, keystore.Key, []byte) error {
+func (failingKeyCopyCommit) Save(context.Context, string, keystore.Key, []byte) error {
 	return errors.New("simulated key copy commit failure")
 }
 
@@ -102,7 +102,7 @@ func TestKeyCopy(t *testing.T) {
 			}
 			const root, child = `{"chainPath":null}`, `{"chainPath":[0,1]}`
 			rootKey, childKey := publicKey("1", "source-key", root), publicKey("1", "source-key", child)
-			old, err := nodes["1"].keys.Load(ctx, algorithm, "source-key")
+			old, err := nodes["1"].keys.Load(ctx, keystore.DefaultApplication, algorithm, "source-key")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -174,7 +174,7 @@ func TestKeyCopy(t *testing.T) {
 			if got := call("1", path, "copy", target, body); got.Code != 409 {
 				t.Fatalf("changed copy source returned %d", got.Code)
 			}
-			original, err := nodes["1"].keys.Load(ctx, algorithm, "source-key")
+			original, err := nodes["1"].keys.Load(ctx, keystore.DefaultApplication, algorithm, "source-key")
 			if err != nil || !bytes.Equal(old, original) {
 				t.Fatal("source share changed")
 			}
@@ -184,7 +184,7 @@ func TestKeyCopy(t *testing.T) {
 					t.Fatal("copied public key differs")
 				}
 			}
-			newShare, err := nodes["1"].keys.Load(ctx, algorithm, "copy-key")
+			newShare, err := nodes["1"].keys.Load(ctx, keystore.DefaultApplication, algorithm, "copy-key")
 			if err != nil || bytes.Equal(newShare, old) {
 				t.Fatal("copied key did not get fresh shares")
 			}

@@ -70,7 +70,7 @@ func (n *node) signWithFROSTPresign(w http.ResponseWriter, r *http.Request) {
 		}
 		key = &keygen.Output{SecretKey: secret, Public: public}
 	}
-	record, err := n.keys.ConsumeFROSTPresign(r.Context(), keyID, request.PresignatureID)
+	record, err := n.keys.ConsumeFROSTPresign(r.Context(), applicationID(r.Context()), keyID, request.PresignatureID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		http.Error(w, "presignature unavailable", http.StatusNotFound)

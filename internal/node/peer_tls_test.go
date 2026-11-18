@@ -66,7 +66,7 @@ func TestMPCPeerTLSBindsNodeIdentity(t *testing.T) {
 	}
 
 	inbox := make(chan *protocol.Message, 1)
-	node2.sessions["frost.demo"] = &keygenSession{incoming: inbox}
+	node2.sessions[sessionKey{defaultApplication, "frost.demo"}] = &keygenSession{incoming: inbox}
 	handler := node2.peerHandler()
 	for _, test := range []struct {
 		name string

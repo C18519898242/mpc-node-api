@@ -58,7 +58,7 @@ func (n *node) keyCopy(algorithm string) http.HandlerFunc {
 		key := keystore.Key{
 			Algorithm: algorithm, SessionID: "copy." + sessionID, KeyID: request.KeyID, Threshold: request.Threshold,
 		}
-		release := n.lockKeyOperation(w, algorithm, key.KeyID, true)
+		release := n.lockKeyOperation(w, applicationID(r.Context()), algorithm, key.KeyID, true)
 		if release == nil {
 			return
 		}
@@ -71,12 +71,12 @@ func (n *node) keyCopy(algorithm string) http.HandlerFunc {
 			defer releaseSource()
 		}
 
-		reservation, err := n.keys.Reserve(r.Context(), key)
+		reservation, err := n.keys.Reserve(r.Context(), applicationID(r.Context()), key)
 		if err != nil {
 			http.Error(w, "could not reserve key copy", http.StatusInternalServerError)
 			return
 		}
-		if reservation == keystore.Conflict || (reservation == keystore.Completed && !n.matchesCompletedCopy(route, key, sourceID, players)) {
+		if reservation == keystore.Conflict || (reservation == keystore.Completed && !n.matchesCompletedCopy(r.Context(), route, key, sourceID, players)) {
 			http.Error(w, "key copy session or key ID already used", http.StatusConflict)
 			return
 		}
@@ -119,10 +119,10 @@ func parseKeyCopyRoute(route string) (algorithm, sessionID string, ok bool) {
 	return algorithm, sessionID, ok && (algorithm == "ecdsa" || algorithm == "frost") && memorySessionPattern.MatchString(sessionID)
 }
 
-func (n *node) matchesCompletedCopy(route string, key keystore.Key, sourceID string, players party.IDSlice) bool {
+func (n *node) matchesCompletedCopy(ctx context.Context, route string, key keystore.Key, sourceID string, players party.IDSlice) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	session := n.sessions[route]
+	session := n.sessions[sessionKey{applicationID(ctx), route}]
 	return session != nil && session.status.State == "succeeded" && session.key == key &&
 		session.copySourceID == sourceID && slices.Equal(session.players, players)
 }
@@ -132,8 +132,9 @@ func (n *node) runKeyCopy(ctx context.Context, key keystore.Key, route, sourceID
 		key: key, players: players, copySourceID: sourceID, status: keygenStatus{State: "running"},
 		incoming: make(chan *protocol.Message, 32), copyIncoming: make(chan *protocol.Message, 3*len(players)),
 	}
+	lookup := sessionKey{applicationID(ctx), route}
 	n.mu.Lock()
-	n.sessions[route] = session
+	n.sessions[lookup] = session
 	n.mu.Unlock()
 	defer func() {
 		n.mu.Lock()
@@ -146,12 +147,12 @@ func (n *node) runKeyCopy(ctx context.Context, key keystore.Key, route, sourceID
 		// Slow peers can still confirm after this node has written its share.
 		time.AfterFunc(keygenTimeout, func() {
 			n.mu.Lock()
-			delete(n.sessions, route)
+			delete(n.sessions, lookup)
 			n.mu.Unlock()
 		})
 	}()
 	binding := sha256.Sum256(fmt.Appendf(nil, "%s:%s:%d:%q", route, key.KeyID, key.Threshold, players))
-	copy(binding[:], n.applicationBinding(binding[:]))
+	copy(binding[:], applicationBinding(applicationID(ctx), binding[:]))
 	exchange := &copyExchange{
 		node: n, route: route, binding: binding, players: players, incoming: session.copyIncoming,
 		received: map[string]map[party.ID][]byte{copySourceRound: {}, copyCommitRound: {}, copyShareRound: {}},
@@ -180,10 +181,11 @@ func (n *node) runKeyCopy(ctx context.Context, key keystore.Key, route, sourceID
 			return "confirmation", err
 		}
 	}
-	return "storage", n.keys.Save(ctx, key, candidate)
+	return "storage", n.keys.Save(ctx, applicationID(ctx), key, candidate)
 }
 
 func (n *node) keyCopyReady(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	route := r.PathValue("sessionId")
 	_, _, ok := parseKeyCopyRoute(route)
 	var request reshareConfirmation
@@ -193,7 +195,7 @@ func (n *node) keyCopyReady(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n.mu.Lock()
-	session := n.sessions[route]
+	session := n.sessions[sessionKey{applicationID(ctx), route}]
 	var digest *[32]byte
 	if session != nil && session.key.KeyID == request.KeyID {
 		if n.config.MPCTLS != nil && !session.players.Contains(n.verifiedPeer(r)) {

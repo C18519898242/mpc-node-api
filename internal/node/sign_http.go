@@ -52,7 +52,7 @@ func (n *node) serveSignature(w http.ResponseWriter, r *http.Request, id, keyID 
 		http.Error(w, "could not encode signing parameters", http.StatusInternalServerError)
 		return
 	}
-	session := n.beginSign(id, sha256.Sum256(binding), run)
+	session := n.beginSign(r.Context(), id, sha256.Sum256(binding), run)
 	if session == nil {
 		http.Error(w, "session ID already used with different signing parameters", http.StatusConflict)
 		return
@@ -74,10 +74,10 @@ func (n *node) serveSignature(w http.ResponseWriter, r *http.Request, id, keyID 
 	}
 }
 
-func (n *node) beginSign(id string, binding [32]byte, run signOperation) *keygenSession {
+func (n *node) beginSign(ctx context.Context, id string, binding [32]byte, run signOperation) *keygenSession {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if session := n.sessions[id]; session != nil {
+	if session := n.sessions[sessionKey{applicationID(ctx), id}]; session != nil {
 		if session.signBinding == binding {
 			return session
 		}
@@ -89,14 +89,14 @@ func (n *node) beginSign(id string, binding [32]byte, run signOperation) *keygen
 		done:        make(chan struct{}),
 		signBinding: binding,
 	}
-	n.sessions[id] = session
-	go n.runSign(id, session, run)
+	n.sessions[sessionKey{applicationID(ctx), id}] = session
+	go n.runSign(context.WithoutCancel(ctx), id, session, run)
 	return session
 }
 
-func (n *node) runSign(id string, session *keygenSession, run signOperation) {
+func (n *node) runSign(ctx context.Context, id string, session *keygenSession, run signOperation) {
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), keygenTimeout)
+	ctx, cancel := context.WithTimeout(ctx, keygenTimeout)
 	defer cancel()
 	signature, err := run(ctx, session)
 	algorithm, _, _ := strings.Cut(id, "-sign.")

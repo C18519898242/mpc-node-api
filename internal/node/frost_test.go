@@ -78,7 +78,7 @@ func TestGenerateFROSTKey(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = keys.Close() })
-		data, err := keys.Load(ctx, "frost", keyID)
+		data, err := keys.Load(ctx, keystore.DefaultApplication, "frost", keyID)
 		if err != nil {
 			t.Fatal(err)
 		}

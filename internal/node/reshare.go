@@ -38,7 +38,7 @@ func (n *node) reshareKey(algorithm string) http.HandlerFunc {
 			http.Error(w, "reshare request body must be empty", http.StatusBadRequest)
 			return
 		}
-		release := n.lockKeyOperation(w, algorithm, op.KeyID, true)
+		release := n.lockKeyOperation(w, applicationID(r.Context()), algorithm, op.KeyID, true)
 		if release == nil {
 			return
 		}
@@ -57,7 +57,7 @@ func (n *node) reshareKey(algorithm string) http.HandlerFunc {
 			return
 		}
 
-		reservation, stored, err := n.keys.ReserveReshare(r.Context(), op)
+		reservation, stored, err := n.keys.ReserveReshare(r.Context(), applicationID(r.Context()), op)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			http.NotFound(w, r)
@@ -105,12 +105,13 @@ func (n *node) runReshare(ctx context.Context, op keystore.Reshare, players part
 	route := op.Algorithm + "-reshare." + op.SessionID
 	if digest == nil {
 		session := &keygenSession{incoming: make(chan *protocol.Message, 32), status: keygenStatus{State: "running"}}
+		lookup := sessionKey{applicationID(ctx), route}
 		n.mu.Lock()
-		n.sessions[route] = session
+		n.sessions[lookup] = session
 		n.mu.Unlock()
 		defer func() {
 			n.mu.Lock()
-			delete(n.sessions, route)
+			delete(n.sessions, lookup)
 			n.mu.Unlock()
 		}()
 
@@ -124,7 +125,7 @@ func (n *node) runReshare(ctx context.Context, op keystore.Reshare, players part
 			return "protocol", err
 		}
 		confirmation := sha256.Sum256(append([]byte(route+":"+op.KeyID+":"), epoch[:]...))
-		if err := n.keys.StageReshare(ctx, op, confirmation, share); err != nil {
+		if err := n.keys.StageReshare(ctx, applicationID(ctx), op, confirmation, share); err != nil {
 			return "storage", err
 		}
 		digest = confirmation[:]
@@ -142,12 +143,12 @@ func (n *node) runReshare(ctx context.Context, op keystore.Reshare, players part
 			return "confirmation", err
 		}
 	}
-	if err := n.keys.CommitReshare(ctx, op); err != nil {
+	if err := n.keys.CommitReshare(ctx, applicationID(ctx), op); err != nil {
 		return "storage", err
 	}
 	n.mu.Lock()
 	for id, session := range n.sessions {
-		if session.presignIDs != nil && session.key.Algorithm == op.Algorithm && session.key.KeyID == op.KeyID {
+		if id.applicationID == applicationID(ctx) && session.presignIDs != nil && session.key.Algorithm == op.Algorithm && session.key.KeyID == op.KeyID {
 			delete(n.sessions, id)
 		}
 	}
@@ -173,7 +174,7 @@ func (n *node) reshareReady(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid reshare confirmation", http.StatusBadRequest)
 		return
 	}
-	state, err := n.keys.LoadReshare(r.Context(), keystore.Reshare{Algorithm: algorithm, SessionID: sessionID, KeyID: request.KeyID})
+	state, err := n.keys.LoadReshare(r.Context(), applicationID(r.Context()), keystore.Reshare{Algorithm: algorithm, SessionID: sessionID, KeyID: request.KeyID})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		http.NotFound(w, r)
@@ -225,8 +226,14 @@ func (n *node) refreshECDSA(ctx context.Context, keyID, route string, session *k
 	return data, epoch, err
 }
 
-func (n *node) lockKeyOperation(w http.ResponseWriter, algorithm, keyID string, exclusive bool) func() {
-	key := algorithm + ":" + keyID
+type keyOperation struct {
+	applicationID string
+	algorithm     string
+	keyID         string
+}
+
+func (n *node) lockKeyOperation(w http.ResponseWriter, appID, algorithm, keyID string, exclusive bool) func() {
+	key := keyOperation{appID, algorithm, keyID}
 	n.mu.Lock()
 	active := n.keyOperations[key]
 	if active < 0 || (exclusive && active != 0) {
@@ -252,11 +259,11 @@ func (n *node) lockKeyOperation(w http.ResponseWriter, algorithm, keyID string, 
 }
 
 func (n *node) lockSigningKey(w http.ResponseWriter, r *http.Request, algorithm, keyID string) func() {
-	release := n.lockKeyOperation(w, algorithm, keyID, false)
+	release := n.lockKeyOperation(w, applicationID(r.Context()), algorithm, keyID, false)
 	if release == nil {
 		return nil
 	}
-	pending, err := n.keys.PendingReshare(r.Context(), algorithm, keyID)
+	pending, err := n.keys.PendingReshare(r.Context(), applicationID(r.Context()), algorithm, keyID)
 	switch {
 	case err != nil:
 		http.Error(w, "could not check key status", http.StatusInternalServerError)

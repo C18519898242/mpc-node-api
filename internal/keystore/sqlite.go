@@ -27,17 +27,10 @@ const (
 )
 
 type SQLite struct {
-	db            *sql.DB
-	applicationID string
+	db *sql.DB
 }
 
 const DefaultApplication = "default"
-
-// ForApplication scopes operations to an application on the same database.
-// The caller that opened the database owns its lifetime.
-func (s *SQLite) ForApplication(id string) *SQLite {
-	return &SQLite{db: s.db, applicationID: id}
-}
 
 // OpenNodeSQLite opens the database in a node's configured data directory.
 func OpenNodeSQLite(dataDir, partyID string) (*SQLite, error) {
@@ -61,7 +54,7 @@ func OpenSQLite(path, partyID string) (*SQLite, error) {
 		db.Close()
 		return nil, fmt.Errorf("initialize key database: %w", err)
 	}
-	return &SQLite{db: db, applicationID: DefaultApplication}, nil
+	return &SQLite{db: db}, nil
 }
 
 func initSQLite(db *sql.DB, partyID string) error {
@@ -173,9 +166,9 @@ func removeCopyColumns(tx *sql.Tx) error {
 
 // Reserve records the session before keygen. A row with no share represents an
 // attempt that must never restart with the same session ID.
-func (s *SQLite) Reserve(ctx context.Context, key Key) (Reservation, error) {
+func (s *SQLite) Reserve(ctx context.Context, applicationID string, key Key) (Reservation, error) {
 	result, err := s.db.ExecContext(ctx, `INSERT INTO key_shares (application_id, algorithm, session_id, key_id, threshold)
-		VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`, s.applicationID, key.Algorithm, key.SessionID, key.KeyID, key.Threshold)
+		VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`, applicationID, key.Algorithm, key.SessionID, key.KeyID, key.Threshold)
 	if err != nil {
 		return Conflict, err
 	}
@@ -189,20 +182,20 @@ func (s *SQLite) Reserve(ctx context.Context, key Key) (Reservation, error) {
 	var completed bool
 	err = s.db.QueryRowContext(ctx, `SELECT share IS NOT NULL FROM key_shares
 		WHERE application_id = ? AND algorithm = ? AND session_id = ? AND key_id = ? AND threshold = ?`,
-		s.applicationID, key.Algorithm, key.SessionID, key.KeyID, key.Threshold).Scan(&completed)
+		applicationID, key.Algorithm, key.SessionID, key.KeyID, key.Threshold).Scan(&completed)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && !completed) {
 		return Conflict, nil
 	}
 	return Completed, err
 }
 
-func (s *SQLite) Save(ctx context.Context, key Key, share []byte) error {
+func (s *SQLite) Save(ctx context.Context, applicationID string, key Key, share []byte) error {
 	if len(share) == 0 {
 		return errors.New("empty key share")
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE key_shares SET share = ?
 		WHERE application_id = ? AND algorithm = ? AND session_id = ? AND key_id = ? AND threshold = ? AND share IS NULL`,
-		share, s.applicationID, key.Algorithm, key.SessionID, key.KeyID, key.Threshold)
+		share, applicationID, key.Algorithm, key.SessionID, key.KeyID, key.Threshold)
 	if err != nil {
 		return err
 	}
@@ -216,21 +209,21 @@ func (s *SQLite) Save(ctx context.Context, key Key, share []byte) error {
 	return nil
 }
 
-func (s *SQLite) Load(ctx context.Context, algorithm, keyID string) ([]byte, error) {
+func (s *SQLite) Load(ctx context.Context, applicationID string, algorithm, keyID string) ([]byte, error) {
 	var share []byte
 	err := s.db.QueryRowContext(ctx, `SELECT share FROM key_shares
-		WHERE application_id = ? AND algorithm = ? AND key_id = ? AND share IS NOT NULL`, s.applicationID, algorithm, keyID).Scan(&share)
+		WHERE application_id = ? AND algorithm = ? AND key_id = ? AND share IS NOT NULL`, applicationID, algorithm, keyID).Scan(&share)
 	return share, err
 }
 
-func (s *SQLite) DeleteKeyShare(ctx context.Context, keyID string) error {
+func (s *SQLite) DeleteKeyShare(ctx context.Context, applicationID string, keyID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	// Keep the reservation so replay cannot create another key under this ID.
-	result, err := tx.ExecContext(ctx, "UPDATE key_shares SET share = NULL WHERE application_id = ? AND key_id = ? AND share IS NOT NULL", s.applicationID, keyID)
+	result, err := tx.ExecContext(ctx, "UPDATE key_shares SET share = NULL WHERE application_id = ? AND key_id = ? AND share IS NOT NULL", applicationID, keyID)
 	if err != nil {
 		return err
 	}
@@ -242,13 +235,13 @@ func (s *SQLite) DeleteKeyShare(ctx context.Context, keyID string) error {
 		return sql.ErrNoRows
 	}
 	for _, algorithm := range []string{"ecdsa", "frost"} {
-		if err := s.invalidatePresign(ctx, tx, algorithm, keyID); err != nil {
+		if err := s.invalidatePresign(ctx, applicationID, tx, algorithm, keyID); err != nil {
 			return err
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE reshare_sessions
 		SET state = 'superseded', share = NULL, digest = NULL
-		WHERE application_id = ? AND key_id = ? AND state <> 'superseded'`, s.applicationID, keyID); err != nil {
+		WHERE application_id = ? AND key_id = ? AND state <> 'superseded'`, applicationID, keyID); err != nil {
 		return err
 	}
 	return tx.Commit()

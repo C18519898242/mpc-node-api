@@ -12,7 +12,7 @@ import (
 )
 
 func (n *node) loadECDSAShare(ctx context.Context, keyID string, path []uint32) (*cmp.Config, error) {
-	data, err := n.keys.Load(ctx, "ecdsa", keyID)
+	data, err := n.keys.Load(ctx, applicationID(ctx), "ecdsa", keyID)
 	if err != nil {
 		return nil, err
 	}
@@ -38,10 +38,10 @@ func deriveECDSAShare(share *cmp.Config, path []uint32) (*cmp.Config, error) {
 	return share, nil
 }
 
-func (n *node) loadKeygenStatus(id string) (keygenStatus, error) {
-	data, err := os.ReadFile(n.sharePath(id))
+func (n *node) loadKeygenStatus(appID, id string) (keygenStatus, error) {
+	data, err := os.ReadFile(n.sharePath(appID, id))
 	if errors.Is(err, os.ErrNotExist) {
-		if _, markerErr := os.Stat(n.sharePath(id) + ".started"); markerErr == nil {
+		if _, markerErr := os.Stat(n.sharePath(appID, id) + ".started"); markerErr == nil {
 			return keygenStatus{SessionID: id, State: "failed"}, nil
 		} else if !errors.Is(markerErr, os.ErrNotExist) {
 			return keygenStatus{}, markerErr
@@ -69,19 +69,27 @@ func (n *node) decodeCMPShare(data []byte) (*cmp.Config, error) {
 	return config, nil
 }
 
-func (n *node) sharePath(id string) string {
-	return filepath.Join(n.config.DataDir, "cmp-"+id+".share")
+func (n *node) sharePath(appID, id string) string {
+	dir := n.config.DataDir
+	if appID != defaultApplication {
+		dir = filepath.Join(dir, "applications", hex.EncodeToString([]byte(appID)))
+	}
+	return filepath.Join(dir, "cmp-"+id+".share")
 }
 
-func (n *node) recordKeygenAttempt(id string) error {
-	file, err := os.OpenFile(n.sharePath(id)+".started", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+func (n *node) recordKeygenAttempt(appID, id string) error {
+	path := n.sharePath(appID, id)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path+".started", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
 	}
 	return file.Close()
 }
 
-func (n *node) saveShare(id string, config *cmp.Config) (keygenStatus, error) {
+func (n *node) saveShare(appID, id string, config *cmp.Config) (keygenStatus, error) {
 	status, err := completedStatus(id, config)
 	if err != nil {
 		return keygenStatus{}, err
@@ -91,7 +99,7 @@ func (n *node) saveShare(id string, config *cmp.Config) (keygenStatus, error) {
 		return keygenStatus{}, err
 	}
 	defer clear(data)
-	file, err := os.CreateTemp(n.config.DataDir, ".share-*")
+	file, err := os.CreateTemp(filepath.Dir(n.sharePath(appID, id)), ".share-*")
 	if err != nil {
 		return keygenStatus{}, err
 	}
@@ -102,7 +110,7 @@ func (n *node) saveShare(id string, config *cmp.Config) (keygenStatus, error) {
 	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
 		return keygenStatus{}, err
 	}
-	return status, os.Rename(file.Name(), n.sharePath(id))
+	return status, os.Rename(file.Name(), n.sharePath(appID, id))
 }
 
 func completedStatus(id string, config *cmp.Config) (keygenStatus, error) {

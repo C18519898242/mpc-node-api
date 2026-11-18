@@ -17,6 +17,15 @@
 ```powershell
 .\scripts\gen-mpc-certs.ps1
 .\scripts\dev-up.ps1
+```
+
+停止节点后，可以用仓库随附的测试凭据运行冒烟测试。
+
+```powershell
+$devKeys = Get-Content -Raw configs/dev-api-keys.json | ConvertFrom-Json
+$env:MPC_NODE_API_KEY_1 = $devKeys.'1'.default
+$env:MPC_NODE_API_KEY_2 = $devKeys.'2'.default
+$env:MPC_NODE_API_KEY_3 = $devKeys.'3'.default
 .\scripts\dev-up.ps1 -Smoke
 ```
 
@@ -33,6 +42,8 @@
 默认配置下，MPC 端口使用 TLS 1.3 双向认证，REST 端口使用回环 HTTP。`-Smoke` 调用旧的 `/v1/keygen`，分片以 CMP 二进制文件写入各节点的数据目录。只使用测试密钥。 [MPC mTLS 使用说明](docs/mtls/README.md)
 
 ## REST API Key 与应用隔离
+
+默认三节点联调配置已开启认证。`configs/dev-api-keys.json` 包含 `default` 和 `wallet-a` 的测试凭据，仅供回环地址上的本地联调。
 
 在节点 JSON 中加入 `restAuth` 开启认证。每把 API Key 配置一个 `applicationID` 和原始凭据字符串的 Base64 编码 SHA-256 摘要。
 

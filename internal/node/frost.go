@@ -52,7 +52,7 @@ func (n *node) frostPublicKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (n *node) loadFROSTPublicKey(ctx context.Context, keyID string, path []uint32) ([]byte, error) {
-	data, err := n.keys.Load(ctx, "frost", keyID)
+	data, err := n.keys.Load(ctx, applicationID(ctx), "frost", keyID)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +129,7 @@ func (n *node) executeFROSTKeygen(ctx context.Context, id string, session *keyge
 }
 
 func (n *node) runFROST(ctx context.Context, id string, session *keygenSession, binding [32]byte, state *froststate.State, roster []party.ID, ids map[party.ID]frostparty.ID, signers party.IDSlice, signing bool) error {
-	copy(binding[:], n.applicationBinding(binding[:]))
+	copy(binding[:], applicationBinding(applicationID(ctx), binding[:]))
 	type messageKey struct {
 		from frostparty.ID
 		kind messages.MessageType
