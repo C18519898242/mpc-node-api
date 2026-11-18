@@ -27,8 +27,9 @@ const (
 )
 
 type SQLite struct {
-	db      *sql.DB
-	partyID string
+	db          *sql.DB
+	partyID     string
+	shareCipher *ShareCipher
 }
 
 const DefaultApplication = "default"
@@ -91,6 +92,17 @@ func initSQLite(db *sql.DB, partyID string) error {
 	}
 	if err := createReshareTable(tx); err != nil {
 		return err
+	}
+	for _, table := range []string{"key_shares", "reshare_sessions"} {
+		var exists bool
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = 'share_format')", table).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := tx.Exec("ALTER TABLE " + table + " ADD COLUMN share_format INTEGER NOT NULL DEFAULT 0 CHECK (share_format IN (0, 1))"); err != nil {
+				return err
+			}
+		}
 	}
 	if _, err := tx.Exec(createMasterKeyTable); err != nil {
 		return err
@@ -197,9 +209,13 @@ func (s *SQLite) Save(ctx context.Context, applicationID string, key Key, share 
 	if len(share) == 0 {
 		return errors.New("empty key share")
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE key_shares SET share = ?
+	record, format, err := s.sealShare(keySharePurpose, applicationID, key.Algorithm, key.KeyID, share)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE key_shares SET share = ?, share_format = ?
 		WHERE application_id = ? AND algorithm = ? AND session_id = ? AND key_id = ? AND threshold = ? AND share IS NULL`,
-		share, applicationID, key.Algorithm, key.SessionID, key.KeyID, key.Threshold)
+		record, format, applicationID, key.Algorithm, key.SessionID, key.KeyID, key.Threshold)
 	if err != nil {
 		return err
 	}
@@ -215,9 +231,13 @@ func (s *SQLite) Save(ctx context.Context, applicationID string, key Key, share 
 
 func (s *SQLite) Load(ctx context.Context, applicationID string, algorithm, keyID string) ([]byte, error) {
 	var share []byte
-	err := s.db.QueryRowContext(ctx, `SELECT share FROM key_shares
-		WHERE application_id = ? AND algorithm = ? AND key_id = ? AND share IS NOT NULL`, applicationID, algorithm, keyID).Scan(&share)
-	return share, err
+	var format int
+	err := s.db.QueryRowContext(ctx, `SELECT share, share_format FROM key_shares
+		WHERE application_id = ? AND algorithm = ? AND key_id = ? AND share IS NOT NULL`, applicationID, algorithm, keyID).Scan(&share, &format)
+	if err != nil {
+		return nil, err
+	}
+	return s.openShare(format, keySharePurpose, applicationID, algorithm, keyID, share)
 }
 
 func (s *SQLite) DeleteKeyShare(ctx context.Context, applicationID string, keyID string) error {

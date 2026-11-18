@@ -60,6 +60,17 @@ func Serve(cfg config.Config) error {
 		return err
 	}
 	defer clear(masterKey)
+	if len(masterKey) != 0 {
+		n.shareCipher = keystore.NewShareCipher(masterKey, string(cfg.PartyID))
+		if err := keys.EnableShareEncryption(context.Background(), n.shareCipher); err != nil {
+			n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "share_encryption")
+			return err
+		}
+		if err := n.encryptLegacyShares(); err != nil {
+			n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "legacy_share_encryption")
+			return err
+		}
+	}
 	rest, err := net.Listen("tcp", n.config.RESTAddr)
 	if err != nil {
 		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "rest_listener")

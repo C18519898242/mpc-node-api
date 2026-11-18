@@ -51,6 +51,13 @@ func (n *node) loadKeygenStatus(appID, id string) (keygenStatus, error) {
 		return keygenStatus{}, err
 	}
 	defer clear(data)
+	if n.shareCipher != nil {
+		data, err = n.openLegacyShare(appID, id, data)
+		if err != nil {
+			return keygenStatus{}, err
+		}
+		defer clear(data)
+	}
 	config, err := n.decodeCMPShare(data)
 	if err != nil {
 		return keygenStatus{}, err
@@ -99,18 +106,28 @@ func (n *node) saveShare(appID, id string, config *cmp.Config) (keygenStatus, er
 		return keygenStatus{}, err
 	}
 	defer clear(data)
-	file, err := os.CreateTemp(filepath.Dir(n.sharePath(appID, id)), ".share-*")
+	if n.shareCipher != nil {
+		data, err = n.sealLegacyShare(appID, id, data)
+		if err != nil {
+			return keygenStatus{}, err
+		}
+	}
+	return status, writeShareFile(n.sharePath(appID, id), data)
+}
+
+func writeShareFile(path string, data []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".share-*")
 	if err != nil {
-		return keygenStatus{}, err
+		return err
 	}
 	defer os.Remove(file.Name())
 	_, writeErr := file.Write(data)
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
-		return keygenStatus{}, err
+		return err
 	}
-	return status, os.Rename(file.Name(), n.sharePath(appID, id))
+	return os.Rename(file.Name(), path)
 }
 
 func completedStatus(id string, config *cmp.Config) (keygenStatus, error) {

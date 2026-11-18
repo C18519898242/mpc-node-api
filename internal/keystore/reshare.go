@@ -75,9 +75,13 @@ func (s *SQLite) StageReshare(ctx context.Context, applicationID string, op Resh
 	if len(share) == 0 {
 		return errors.New("empty refreshed share")
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE reshare_sessions SET digest = ?, share = ?, state = 'prepared'
+	record, format, err := s.sealShare(resharePurpose(op.SessionID), applicationID, op.Algorithm, op.KeyID, share)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE reshare_sessions SET digest = ?, share = ?, share_format = ?, state = 'prepared'
 		WHERE application_id = ? AND algorithm = ? AND session_id = ? AND key_id = ? AND state = 'started'`,
-		digest[:], share, applicationID, op.Algorithm, op.SessionID, op.KeyID)
+		digest[:], record, format, applicationID, op.Algorithm, op.SessionID, op.KeyID)
 	return requireShareUpdate(result, err)
 }
 
@@ -90,11 +94,26 @@ func (s *SQLite) CommitReshare(ctx context.Context, applicationID string, op Res
 		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE key_shares AS k SET share = r.share
-		FROM reshare_sessions AS r
-		WHERE k.application_id = r.application_id AND k.algorithm = r.algorithm AND k.key_id = r.key_id
-		AND r.application_id = ? AND r.algorithm = ? AND r.key_id = ? AND r.session_id = ? AND r.state = 'prepared'`,
-		applicationID, op.Algorithm, op.KeyID, op.SessionID)
+	var candidate []byte
+	var format int
+	if err := tx.QueryRowContext(ctx, `SELECT share, share_format FROM reshare_sessions
+		WHERE application_id = ? AND algorithm = ? AND key_id = ? AND session_id = ? AND state = 'prepared' AND share IS NOT NULL`,
+		applicationID, op.Algorithm, op.KeyID, op.SessionID).Scan(&candidate, &format); err != nil {
+		return err
+	}
+	defer clear(candidate)
+	share, err := s.openShare(format, resharePurpose(op.SessionID), applicationID, op.Algorithm, op.KeyID, candidate)
+	if err != nil {
+		return err
+	}
+	defer clear(share)
+	record, format, err := s.sealShare(keySharePurpose, applicationID, op.Algorithm, op.KeyID, share)
+	if err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE key_shares SET share = ?, share_format = ?
+		WHERE application_id = ? AND algorithm = ? AND key_id = ? AND share IS NOT NULL`,
+		record, format, applicationID, op.Algorithm, op.KeyID)
 	if err := requireShareUpdate(result, err); err != nil {
 		return err
 	}

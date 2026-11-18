@@ -44,6 +44,7 @@ type node struct {
 	sessions      map[sessionKey]*keygenSession
 	keyOperations map[keyOperation]int
 	keys          shareStore
+	shareCipher   *keystore.ShareCipher
 }
 
 func newNode(cfg config.Config) *node {
