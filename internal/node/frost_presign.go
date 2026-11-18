@@ -51,6 +51,7 @@ func (n *node) prepareFROSTPresign(ctx context.Context, keyID string, signers pa
 }
 
 func (n *node) runFROSTPresignSlot(ctx context.Context, route string, binding [32]byte, signers party.IDSlice, ids map[party.ID]frostparty.ID, inbox <-chan *protocol.Message) (keystore.Presignature, error) {
+	copy(binding[:], n.applicationBinding(binding[:]))
 	record := frostPresignShare{Players: signers, Commitments: make([][]byte, len(signers))}
 	defer clear(record.Nonces[:])
 	var points [2]*ristretto.Element

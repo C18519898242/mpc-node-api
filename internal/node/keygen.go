@@ -116,7 +116,7 @@ func (n *node) executeKeygen(ctx context.Context, id string, protocolID []byte, 
 }
 
 func (n *node) runCMP(ctx context.Context, id string, protocolID []byte, start protocol.StartFunc, incoming <-chan *protocol.Message, participants party.IDSlice) (any, error) {
-	handler, err := protocol.NewMultiHandler(start, protocolID)
+	handler, err := protocol.NewMultiHandler(start, n.applicationBinding(protocolID))
 	if err != nil {
 		return nil, err
 	}

@@ -129,6 +129,7 @@ func (n *node) executeFROSTKeygen(ctx context.Context, id string, session *keyge
 }
 
 func (n *node) runFROST(ctx context.Context, id string, session *keygenSession, binding [32]byte, state *froststate.State, roster []party.ID, ids map[party.ID]frostparty.ID, signers party.IDSlice, signing bool) error {
+	copy(binding[:], n.applicationBinding(binding[:]))
 	type messageKey struct {
 		from frostparty.ID
 		kind messages.MessageType

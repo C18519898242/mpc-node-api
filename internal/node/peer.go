@@ -19,9 +19,16 @@ import (
 
 func (n *node) peerHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /internal/mpc/{sessionId}", n.receiveMessage)
-	mux.HandleFunc("POST /internal/reshare/{sessionId}/ready", n.reshareReady)
-	mux.HandleFunc("POST /internal/keycopy/{sessionId}/ready", n.keyCopyReady)
+	if n.config.RESTAuth != nil {
+		for id, app := range n.applications {
+			prefix := peerApplicationPath + id
+			mux.Handle(prefix+"/", http.StripPrefix(prefix, app.peerHandler()))
+		}
+	} else {
+		mux.HandleFunc("POST /internal/mpc/{sessionId}", n.receiveMessage)
+		mux.HandleFunc("POST /internal/reshare/{sessionId}/ready", n.reshareReady)
+		mux.HandleFunc("POST /internal/keycopy/{sessionId}/ready", n.keyCopyReady)
+	}
 	if n.config.MPCTLS == nil {
 		return mux
 	}
@@ -149,6 +156,9 @@ func (n *node) deliverMessage(ctx context.Context, peer party.ID, path string, b
 		if client == nil {
 			return errors.New("MPC peer has no TLS configuration")
 		}
+	}
+	if n.applicationID != "" {
+		path = peerApplicationPath + n.applicationID + path
 	}
 	endpoint := url.URL{Scheme: scheme, Host: n.config.Peers[peer], Path: path}
 	for {

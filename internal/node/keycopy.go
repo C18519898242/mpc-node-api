@@ -151,6 +151,7 @@ func (n *node) runKeyCopy(ctx context.Context, key keystore.Key, route, sourceID
 		})
 	}()
 	binding := sha256.Sum256(fmt.Appendf(nil, "%s:%s:%d:%q", route, key.KeyID, key.Threshold, players))
+	copy(binding[:], n.applicationBinding(binding[:]))
 	exchange := &copyExchange{
 		node: n, route: route, binding: binding, players: players, incoming: session.copyIncoming,
 		received: map[string]map[party.ID][]byte{copySourceRound: {}, copyCommitRound: {}, copyShareRound: {}},

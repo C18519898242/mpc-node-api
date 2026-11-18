@@ -39,14 +39,41 @@ try {
     Write-Host "REST ready at $($urls -join ', ')"
 
     if ($Smoke) {
+        $applications = [string[]]::new($nodes.Count)
+        $headers = @(
+            for ($i = 0; $i -lt $nodes.Count; $i++) {
+                $node = $nodes[$i]
+                $header = @{}
+                if ($null -ne $node.restAuth) {
+                    $envName = "MPC_NODE_API_KEY_$($node.partyId)"
+                    $credential = [Environment]::GetEnvironmentVariable($envName)
+                    if ([string]::IsNullOrWhiteSpace($credential)) {
+                        throw "Set $envName for the authenticated smoke test."
+                    }
+                    $header.Authorization = "APIKEY $credential"
+                    $hasher = [Security.Cryptography.SHA256]::Create()
+                    try {
+                        $digest = [Convert]::ToBase64String($hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($credential)))
+                    } finally {
+                        $hasher.Dispose()
+                    }
+                    $matched = @($node.restAuth.apiKeys | Where-Object { $_.sha256 -ceq $digest })
+                    if ($matched.Count -ne 1) { throw "$envName does not match the node config." }
+                    $applications[$i] = $matched[0].applicationID
+                }
+                $header
+            }
+        )
         $sessionId = [Guid]::NewGuid().ToString('N')
         $body = @{ sessionId = $sessionId } | ConvertTo-Json -Compress
-        foreach ($url in $urls) {
-            Invoke-RestMethod "$url/v1/keygen" -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 5 | Out-Null
+        for ($i = 0; $i -lt $urls.Count; $i++) {
+            Invoke-RestMethod "$($urls[$i])/v1/keygen" -Method Post -Headers $headers[$i] -ContentType 'application/json' -Body $body -TimeoutSec 5 | Out-Null
         }
         $deadline = [DateTime]::UtcNow.AddMinutes(3.2)
         do {
-            $results = @($urls | ForEach-Object { Invoke-RestMethod "$_/v1/sessions/$sessionId" -TimeoutSec 5 })
+            $results = @(for ($i = 0; $i -lt $urls.Count; $i++) {
+                Invoke-RestMethod "$($urls[$i])/v1/sessions/$sessionId" -Headers $headers[$i] -TimeoutSec 5
+            })
             if ($results.state -contains 'failed') { throw 'Keygen failed.' }
             if (@($results | Where-Object { $_.state -eq 'succeeded' }).Count -eq 3) { break }
             if ([DateTime]::UtcNow -ge $deadline) { throw 'Keygen timed out.' }
@@ -60,6 +87,10 @@ try {
             for ($i = 0; $i -lt $paths.Count; $i++) {
                 $dir = $nodes[$i].dataDir
                 if (![IO.Path]::IsPathRooted($dir)) { $dir = Join-Path (Split-Path -Parent $paths[$i]) $dir }
+                if ($applications[$i] -and $applications[$i] -cne 'default') {
+                    $appDir = -join ([Text.Encoding]::UTF8.GetBytes($applications[$i]) | ForEach-Object { $_.ToString('x2') })
+                    $dir = Join-Path (Join-Path $dir 'applications') $appDir
+                }
                 Get-Item -LiteralPath (Join-Path $dir "cmp-$sessionId.share")
             }
         )

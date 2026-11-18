@@ -27,7 +27,16 @@ const (
 )
 
 type SQLite struct {
-	db *sql.DB
+	db            *sql.DB
+	applicationID string
+}
+
+const DefaultApplication = "default"
+
+// ForApplication scopes operations to an application on the same database.
+// The caller that opened the database owns its lifetime.
+func (s *SQLite) ForApplication(id string) *SQLite {
+	return &SQLite{db: s.db, applicationID: id}
 }
 
 // OpenNodeSQLite opens the database in a node's configured data directory.
@@ -52,7 +61,7 @@ func OpenSQLite(path, partyID string) (*SQLite, error) {
 		db.Close()
 		return nil, fmt.Errorf("initialize key database: %w", err)
 	}
-	return &SQLite{db: db}, nil
+	return &SQLite{db: db, applicationID: DefaultApplication}, nil
 }
 
 func initSQLite(db *sql.DB, partyID string) error {
@@ -83,9 +92,6 @@ func initSQLite(db *sql.DB, partyID string) error {
 	if err := migrateKeyShares(tx); err != nil {
 		return err
 	}
-	if err := removeCopyColumns(tx); err != nil {
-		return err
-	}
 	if err := createPresignTables(tx); err != nil {
 		return err
 	}
@@ -97,34 +103,50 @@ func initSQLite(db *sql.DB, partyID string) error {
 
 const createKeyShares = `CREATE TABLE IF NOT EXISTS key_shares (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	application_id TEXT NOT NULL DEFAULT 'default',
 	algorithm TEXT NOT NULL,
 	session_id TEXT NOT NULL,
 	key_id TEXT NOT NULL,
 	threshold INTEGER NOT NULL,
 	share BLOB,
 	created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-	UNIQUE (algorithm, key_id),
-	UNIQUE (algorithm, session_id)
+	UNIQUE (application_id, algorithm, key_id),
+	UNIQUE (application_id, algorithm, session_id)
 )`
 
 func migrateKeyShares(tx *sql.Tx) error {
+	if _, err := tx.Exec(createKeyShares); err != nil {
+		return err
+	}
 	var legacy bool
 	if err := tx.QueryRow(`SELECT EXISTS (
 		SELECT 1 FROM pragma_table_info('key_shares') WHERE name = 'algorithm' AND pk > 0
 	)`).Scan(&legacy); err != nil {
 		return err
 	}
-	if !legacy {
-		_, err := tx.Exec(createKeyShares)
+	idAndTime := "id, algorithm, session_id, key_id, threshold, share, created_at"
+	source := idAndTime
+	if legacy {
+		source = "rowid, algorithm, session_id, key_id, threshold, share, NULL"
+	}
+	if err := migrateApplicationTable(tx, "key_shares", createKeyShares, idAndTime, source); err != nil {
 		return err
 	}
-	// The old schema recorded no creation time. Preserve row order via rowid.
+	return removeCopyColumns(tx)
+}
+
+// Rebuilding replaces legacy uniqueness constraints with application-scoped ones.
+func migrateApplicationTable(tx *sql.Tx, table, schema, columns, source string) error {
+	var scoped bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = 'application_id')", table).Scan(&scoped); err != nil || scoped {
+		return err
+	}
+	legacy := table + "_legacy"
 	for _, query := range []string{
-		"ALTER TABLE key_shares RENAME TO key_shares_legacy",
-		createKeyShares,
-		`INSERT INTO key_shares (id, algorithm, session_id, key_id, threshold, share, created_at)
-		 SELECT rowid, algorithm, session_id, key_id, threshold, share, NULL FROM key_shares_legacy`,
-		"DROP TABLE key_shares_legacy",
+		"ALTER TABLE " + table + " RENAME TO " + legacy,
+		schema,
+		"INSERT INTO " + table + " (" + columns + ") SELECT " + source + " FROM " + legacy,
+		"DROP TABLE " + legacy,
 	} {
 		if _, err := tx.Exec(query); err != nil {
 			return err
@@ -152,8 +174,8 @@ func removeCopyColumns(tx *sql.Tx) error {
 // Reserve records the session before keygen. A row with no share represents an
 // attempt that must never restart with the same session ID.
 func (s *SQLite) Reserve(ctx context.Context, key Key) (Reservation, error) {
-	result, err := s.db.ExecContext(ctx, `INSERT INTO key_shares (algorithm, session_id, key_id, threshold)
-		VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`, key.Algorithm, key.SessionID, key.KeyID, key.Threshold)
+	result, err := s.db.ExecContext(ctx, `INSERT INTO key_shares (application_id, algorithm, session_id, key_id, threshold)
+		VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`, s.applicationID, key.Algorithm, key.SessionID, key.KeyID, key.Threshold)
 	if err != nil {
 		return Conflict, err
 	}
@@ -166,8 +188,8 @@ func (s *SQLite) Reserve(ctx context.Context, key Key) (Reservation, error) {
 	}
 	var completed bool
 	err = s.db.QueryRowContext(ctx, `SELECT share IS NOT NULL FROM key_shares
-		WHERE algorithm = ? AND session_id = ? AND key_id = ? AND threshold = ?`,
-		key.Algorithm, key.SessionID, key.KeyID, key.Threshold).Scan(&completed)
+		WHERE application_id = ? AND algorithm = ? AND session_id = ? AND key_id = ? AND threshold = ?`,
+		s.applicationID, key.Algorithm, key.SessionID, key.KeyID, key.Threshold).Scan(&completed)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && !completed) {
 		return Conflict, nil
 	}
@@ -179,8 +201,8 @@ func (s *SQLite) Save(ctx context.Context, key Key, share []byte) error {
 		return errors.New("empty key share")
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE key_shares SET share = ?
-		WHERE algorithm = ? AND session_id = ? AND key_id = ? AND threshold = ? AND share IS NULL`,
-		share, key.Algorithm, key.SessionID, key.KeyID, key.Threshold)
+		WHERE application_id = ? AND algorithm = ? AND session_id = ? AND key_id = ? AND threshold = ? AND share IS NULL`,
+		share, s.applicationID, key.Algorithm, key.SessionID, key.KeyID, key.Threshold)
 	if err != nil {
 		return err
 	}
@@ -197,7 +219,7 @@ func (s *SQLite) Save(ctx context.Context, key Key, share []byte) error {
 func (s *SQLite) Load(ctx context.Context, algorithm, keyID string) ([]byte, error) {
 	var share []byte
 	err := s.db.QueryRowContext(ctx, `SELECT share FROM key_shares
-		WHERE algorithm = ? AND key_id = ? AND share IS NOT NULL`, algorithm, keyID).Scan(&share)
+		WHERE application_id = ? AND algorithm = ? AND key_id = ? AND share IS NOT NULL`, s.applicationID, algorithm, keyID).Scan(&share)
 	return share, err
 }
 
@@ -208,7 +230,7 @@ func (s *SQLite) DeleteKeyShare(ctx context.Context, keyID string) error {
 	}
 	defer tx.Rollback()
 	// Keep the reservation so replay cannot create another key under this ID.
-	result, err := tx.ExecContext(ctx, "UPDATE key_shares SET share = NULL WHERE key_id = ? AND share IS NOT NULL", keyID)
+	result, err := tx.ExecContext(ctx, "UPDATE key_shares SET share = NULL WHERE application_id = ? AND key_id = ? AND share IS NOT NULL", s.applicationID, keyID)
 	if err != nil {
 		return err
 	}
@@ -220,13 +242,13 @@ func (s *SQLite) DeleteKeyShare(ctx context.Context, keyID string) error {
 		return sql.ErrNoRows
 	}
 	for _, algorithm := range []string{"ecdsa", "frost"} {
-		if err := invalidatePresign(ctx, tx, algorithm, keyID); err != nil {
+		if err := s.invalidatePresign(ctx, tx, algorithm, keyID); err != nil {
 			return err
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE reshare_sessions
 		SET state = 'superseded', share = NULL, digest = NULL
-		WHERE key_id = ? AND state <> 'superseded'`, keyID); err != nil {
+		WHERE application_id = ? AND key_id = ? AND state <> 'superseded'`, s.applicationID, keyID); err != nil {
 		return err
 	}
 	return tx.Commit()

@@ -46,7 +46,10 @@ func Serve(cfg config.Config) error {
 		return err
 	}
 	defer keys.Close()
-	n.keys = keys
+	if err := n.configureApplications(keys); err != nil {
+		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "rest_auth")
+		return err
+	}
 	rest, err := net.Listen("tcp", n.config.RESTAddr)
 	if err != nil {
 		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "rest_listener")

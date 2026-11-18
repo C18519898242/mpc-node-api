@@ -18,6 +18,16 @@ type Config struct {
 	Peers              map[party.ID]string `json:"peers"`
 	LegacyFROSTPlayers []party.ID          `json:"legacyFrostPlayers,omitempty"`
 	MPCTLS             *MPCTLSConfig       `json:"mpcTLS,omitempty"`
+	RESTAuth           *RESTAuthConfig     `json:"restAuth,omitempty"`
+}
+
+type RESTAuthConfig struct {
+	APIKeys []APIKey `json:"apiKeys"`
+}
+
+type APIKey struct {
+	ApplicationID string `json:"applicationID"`
+	SHA256        string `json:"sha256"`
 }
 
 type MPCTLSConfig struct {

@@ -32,6 +32,28 @@
 
 默认配置下，MPC 端口使用 TLS 1.3 双向认证，REST 端口使用回环 HTTP。`-Smoke` 调用旧的 `/v1/keygen`，分片以 CMP 二进制文件写入各节点的数据目录。只使用测试密钥。 [MPC mTLS 使用说明](docs/mtls/README.md)
 
+## REST API Key 与应用隔离
+
+在节点 JSON 中加入 `restAuth` 开启认证。每把 API Key 配置一个 `applicationID` 和原始凭据字符串的 Base64 编码 SHA-256 摘要。
+
+```json
+{
+  "restAuth": {
+    "apiKeys": [
+      {"applicationID":"wallet-a","sha256":"<Base64 SHA-256 digest>"}
+    ]
+  }
+}
+```
+
+生成凭据时使用至少 32 字节的随机值，再编码为字符串；对该字符串的 UTF-8 字节计算摘要。客户端发送 `Authorization: APIKEY <原始凭据字符串>`。每个节点可以使用不同的凭据，同一组 MPC 请求在参与节点上必须映射到相同的 `applicationID`。轮换凭据时，可以把新旧两把凭据暂时绑定到同一个应用。
+
+开启后，`GET /healthz` 可匿名访问，其余 REST 请求需要认证。凭据缺失或无效返回 `401`。访问另一个应用独有的 `keyID` 与访问当前应用不存在的 `keyID` 一样返回 `404`。不同应用可以使用相同的 `keyID` 或 `sessionId`。同一个应用里的凭据具有相同的操作权限。
+
+每个节点的密钥、预签名和分片刷新记录都保存在该节点数据目录下的 `node.sqlite`，按表中的 `application_id` 隔离。升级时，已有记录自动归到 `default` 应用。如需继续访问，在每个参与节点配置一把映射到 `default` 的凭据。旧版 `/v1/keygen` 使用独立的分片文件，仍按应用区分文件目录。启用认证时同时更新参与节点的配置和客户端凭据。省略 `restAuth` 会使用本机联调模式。
+
+启用认证后，`dev-up.ps1 -Smoke` 从 `MPC_NODE_API_KEY_1`、`MPC_NODE_API_KEY_2`、`MPC_NODE_API_KEY_3` 读取默认三节点的凭据。三个凭据需要映射到同一个应用。
+
 ## 节点版本与协议
 
 使用 `-config` 启动节点后，`GET /version` 返回服务主版本 `{"version":"1"}`。通过 `GET /info/protocols` 可查询该节点注册的 MPC 协议。

@@ -22,6 +22,9 @@ func healthMux() *http.ServeMux {
 }
 
 func (n *node) restHandler() http.Handler {
+	if n.config.RESTAuth != nil {
+		return n.authenticatedRESTHandler()
+	}
 	mux := healthMux()
 	n.registerProtocols(mux)
 	mux.HandleFunc("POST /key/{keyID}/count/presigs", n.logRequest("countpresigs", "key", n.countPresign))

@@ -17,11 +17,11 @@ type Presignature struct {
 func (s *SQLite) CountPresign(ctx context.Context, keyID string) (int, error) {
 	var count int
 	err := s.db.QueryRowContext(ctx, `SELECT
-		(SELECT COUNT(*) FROM ecdsa_presignatures WHERE key_id = ?) +
-		(SELECT COUNT(*) FROM frost_presignatures WHERE key_id = ?)
+		(SELECT COUNT(*) FROM ecdsa_presignatures WHERE application_id = ? AND key_id = ?) +
+		(SELECT COUNT(*) FROM frost_presignatures WHERE application_id = ? AND key_id = ?)
 		WHERE EXISTS (
-			SELECT 1 FROM key_shares WHERE key_id = ? AND share IS NOT NULL
-		)`, keyID, keyID, keyID).Scan(&count)
+			SELECT 1 FROM key_shares WHERE application_id = ? AND key_id = ? AND share IS NOT NULL
+		)`, s.applicationID, keyID, s.applicationID, keyID, s.applicationID, keyID).Scan(&count)
 	return count, err
 }
 
@@ -33,23 +33,23 @@ func (s *SQLite) DeletePresign(ctx context.Context, keyID string) error {
 	defer tx.Rollback()
 
 	var exists int
-	if err := tx.QueryRowContext(ctx, "SELECT 1 FROM key_shares WHERE key_id = ? AND share IS NOT NULL", keyID).Scan(&exists); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT 1 FROM key_shares WHERE application_id = ? AND key_id = ? AND share IS NOT NULL", s.applicationID, keyID).Scan(&exists); err != nil {
 		return err
 	}
 	for _, algorithm := range []string{"ecdsa", "frost"} {
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s_presignatures WHERE key_id = ?", algorithm), keyID); err != nil {
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s_presignatures WHERE application_id = ? AND key_id = ?", algorithm), s.applicationID, keyID); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
 }
 
-func invalidatePresign(ctx context.Context, tx *sql.Tx, algorithm, keyID string) error {
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s_presignatures WHERE key_id = ?", algorithm), keyID); err != nil {
+func (s *SQLite) invalidatePresign(ctx context.Context, tx *sql.Tx, algorithm, keyID string) error {
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s_presignatures WHERE application_id = ? AND key_id = ?", algorithm), s.applicationID, keyID); err != nil {
 		return err
 	}
 	// Keep session reservations while invalidating batch IDs.
-	_, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE %s_presign_batches SET ids = NULL WHERE key_id = ?", algorithm), keyID)
+	_, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE %s_presign_batches SET ids = NULL WHERE application_id = ? AND key_id = ?", algorithm), s.applicationID, keyID)
 	return err
 }
 
@@ -73,9 +73,9 @@ func (s *SQLite) consumePresign(ctx context.Context, algorithm, keyID, presignat
 
 	var share Presignature
 	err = tx.QueryRowContext(ctx, fmt.Sprintf(`DELETE FROM %s_presignatures WHERE id = (
-		SELECT id FROM %s_presignatures WHERE key_id = ? AND (? = '' OR presignature_id = ?)
+		SELECT id FROM %s_presignatures WHERE application_id = ? AND key_id = ? AND (? = '' OR presignature_id = ?)
 		ORDER BY id LIMIT 1
-	) RETURNING presignature_id, share`, algorithm, algorithm), keyID, presignatureID, presignatureID).Scan(&share.ID, &share.Share)
+	) RETURNING presignature_id, share`, algorithm, algorithm), s.applicationID, keyID, presignatureID, presignatureID).Scan(&share.ID, &share.Share)
 	if err == nil {
 		err = tx.Commit()
 	}
@@ -96,24 +96,39 @@ func createPresignTables(tx *sql.Tx) error {
 }
 
 func createPresignTablesFor(tx *sql.Tx, algorithm string) error {
-	if _, err := tx.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s_presign_batches (
+	batches := algorithm + "_presign_batches"
+	batchSchema := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		session_id TEXT NOT NULL UNIQUE,
+		application_id TEXT NOT NULL DEFAULT 'default',
+		session_id TEXT NOT NULL,
 		key_id TEXT NOT NULL,
 		binding BLOB NOT NULL,
 		ids TEXT,
-		created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-	)`, algorithm)); err != nil {
+		created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE (application_id, session_id)
+	)`, batches)
+	batchColumns := "id, session_id, key_id, binding, ids, created_at"
+	if err := ensureApplicationTable(tx, batches, batchSchema, batchColumns); err != nil {
 		return err
 	}
-	_, err := tx.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s_presignatures (
+	shares := algorithm + "_presignatures"
+	shareSchema := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		presignature_id TEXT NOT NULL UNIQUE,
+		application_id TEXT NOT NULL DEFAULT 'default',
+		presignature_id TEXT NOT NULL,
 		key_id TEXT NOT NULL,
 		share BLOB NOT NULL,
-		created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-	)`, algorithm))
-	return err
+		created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE (application_id, presignature_id)
+	)`, shares)
+	return ensureApplicationTable(tx, shares, shareSchema, "id, presignature_id, key_id, share, created_at")
+}
+
+func ensureApplicationTable(tx *sql.Tx, table, schema, columns string) error {
+	if _, err := tx.Exec(schema); err != nil {
+		return err
+	}
+	return migrateApplicationTable(tx, table, schema, columns, columns)
 }
 
 func (s *SQLite) ReserveECDSAPresign(ctx context.Context, sessionID, keyID string, binding [32]byte) (Reservation, []string, error) {
@@ -125,8 +140,8 @@ func (s *SQLite) ReserveFROSTPresign(ctx context.Context, sessionID, keyID strin
 }
 
 func (s *SQLite) reservePresign(ctx context.Context, algorithm, sessionID, keyID string, binding [32]byte) (Reservation, []string, error) {
-	result, err := s.db.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s_presign_batches (session_id, key_id, binding)
-		VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, algorithm), sessionID, keyID, binding[:])
+	result, err := s.db.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s_presign_batches (application_id, session_id, key_id, binding)
+		VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`, algorithm), s.applicationID, sessionID, keyID, binding[:])
 	if err != nil {
 		return Conflict, nil, err
 	}
@@ -139,7 +154,7 @@ func (s *SQLite) reservePresign(ctx context.Context, algorithm, sessionID, keyID
 	}
 	var savedBinding []byte
 	var savedIDs sql.NullString
-	if err := s.db.QueryRowContext(ctx, fmt.Sprintf("SELECT binding, ids FROM %s_presign_batches WHERE session_id = ?", algorithm), sessionID).
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf("SELECT binding, ids FROM %s_presign_batches WHERE application_id = ? AND session_id = ?", algorithm), s.applicationID, sessionID).
 		Scan(&savedBinding, &savedIDs); err != nil {
 		return Conflict, nil, err
 	}
@@ -175,9 +190,9 @@ func (s *SQLite) savePresign(ctx context.Context, algorithm, sessionID string, s
 		if share.ID == "" || len(share.Share) == 0 {
 			return nil, errors.New("invalid presign share")
 		}
-		result, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s_presignatures (presignature_id, key_id, share)
-			SELECT ?, key_id, ? FROM %s_presign_batches WHERE session_id = ? AND ids IS NULL`, algorithm, algorithm),
-			share.ID, share.Share, sessionID)
+		result, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s_presignatures (application_id, presignature_id, key_id, share)
+			SELECT application_id, ?, key_id, ? FROM %s_presign_batches WHERE application_id = ? AND session_id = ? AND ids IS NULL`, algorithm, algorithm),
+			share.ID, share.Share, s.applicationID, sessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -194,7 +209,7 @@ func (s *SQLite) savePresign(ctx context.Context, algorithm, sessionID string, s
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE %s_presign_batches SET ids = ? WHERE session_id = ?", algorithm), string(encoded), sessionID); err != nil {
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE %s_presign_batches SET ids = ? WHERE application_id = ? AND session_id = ?", algorithm), string(encoded), s.applicationID, sessionID); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

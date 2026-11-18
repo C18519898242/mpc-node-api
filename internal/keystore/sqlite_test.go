@@ -4,10 +4,67 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestSQLiteApplicationIsolation(t *testing.T) {
+	ctx := context.Background()
+	db, err := OpenNodeSQLite(t.TempDir(), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	wallets := []*SQLite{db.ForApplication("a"), db.ForApplication("b")}
+	key := Key{Algorithm: "frost", SessionID: "same-session", KeyID: "same-key", Threshold: 2}
+	reshare := Reshare{Algorithm: key.Algorithm, SessionID: "same-reshare", KeyID: key.KeyID}
+	for _, wallet := range wallets {
+		if outcome, err := wallet.Reserve(ctx, key); err != nil || outcome != Reserved {
+			t.Fatalf("reserve key for %s: %v, %v", wallet.applicationID, outcome, err)
+		}
+		if err := wallet.Save(ctx, key, []byte(wallet.applicationID)); err != nil {
+			t.Fatal(err)
+		}
+		presig := Presignature{ID: "same-presig", Share: []byte(wallet.applicationID)}
+		if outcome, _, err := wallet.ReserveFROSTPresign(ctx, "same-presig-session", key.KeyID, [32]byte{1}); err != nil || outcome != Reserved {
+			t.Fatalf("reserve presign for %s: %v, %v", wallet.applicationID, outcome, err)
+		}
+		if _, err := wallet.SaveFROSTPresign(ctx, "same-presig-session", []Presignature{presig}); err != nil {
+			t.Fatal(err)
+		}
+		if outcome, _, err := wallet.ReserveReshare(ctx, reshare); err != nil || outcome != Reserved {
+			t.Fatalf("reserve reshare for %s: %v, %v", wallet.applicationID, outcome, err)
+		}
+		if err := wallet.StageReshare(ctx, reshare, [32]byte{1}, []byte(wallet.applicationID+"-refreshed")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	a, b := wallets[0], wallets[1]
+	if err := a.CommitReshare(ctx, reshare); err != nil {
+		t.Fatal(err)
+	}
+	if share, err := a.Load(ctx, key.Algorithm, key.KeyID); err != nil || string(share) != "a-refreshed" {
+		t.Fatalf("refreshed share: %q, %v", share, err)
+	}
+	if share, err := b.Load(ctx, key.Algorithm, key.KeyID); err != nil || string(share) != "b" {
+		t.Fatalf("wallet b share changed: %q, %v", share, err)
+	}
+	if err := a.DeleteKeyShare(ctx, key.KeyID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Load(ctx, key.Algorithm, key.KeyID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("default app accessed wallet key: %v", err)
+	}
+	if pending, err := b.PendingReshare(ctx, key.Algorithm, key.KeyID); err != nil || !pending {
+		t.Fatalf("wallet b refresh lost: %v, %v", pending, err)
+	}
+	if presig, err := b.ConsumeFROSTPresign(ctx, key.KeyID, "same-presig"); err != nil || string(presig.Share) != "b" {
+		t.Fatalf("wallet b presign lost: %v", err)
+	}
+}
 
 func TestSQLiteReopen(t *testing.T) {
 	ctx := context.Background()

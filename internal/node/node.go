@@ -38,6 +38,9 @@ type node struct {
 	client        *http.Client
 	peerClients   map[party.ID]*http.Client
 	peerNames     map[string]party.ID
+	applicationID string
+	applications  map[string]*node
+	credentials   []apiKeyCredential
 	mu            sync.Mutex
 	sessions      map[string]*keygenSession
 	keyOperations map[string]int
