@@ -11,14 +11,15 @@ import (
 )
 
 type Config struct {
-	PartyID            party.ID            `json:"partyId"`
-	RESTAddr           string              `json:"restAddr"`
-	MPCAddr            string              `json:"mpcAddr"`
-	DataDir            string              `json:"dataDir"`
-	Peers              map[party.ID]string `json:"peers"`
-	LegacyFROSTPlayers []party.ID          `json:"legacyFrostPlayers,omitempty"`
-	MPCTLS             *MPCTLSConfig       `json:"mpcTLS,omitempty"`
-	RESTAuth           *RESTAuthConfig     `json:"restAuth,omitempty"`
+	PartyID                    party.ID            `json:"partyId"`
+	RESTAddr                   string              `json:"restAddr"`
+	MPCAddr                    string              `json:"mpcAddr"`
+	DataDir                    string              `json:"dataDir"`
+	Peers                      map[party.ID]string `json:"peers"`
+	LegacyFROSTPlayers         []party.ID          `json:"legacyFrostPlayers,omitempty"`
+	MPCTLS                     *MPCTLSConfig       `json:"mpcTLS,omitempty"`
+	RESTAuth                   *RESTAuthConfig     `json:"restAuth,omitempty"`
+	EncryptorMasterPasswordEnv string              `json:"encryptorMasterPasswordEnv,omitempty"`
 }
 
 type RESTAuthConfig struct {

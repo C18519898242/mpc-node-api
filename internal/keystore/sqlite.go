@@ -27,7 +27,8 @@ const (
 )
 
 type SQLite struct {
-	db *sql.DB
+	db      *sql.DB
+	partyID string
 }
 
 const DefaultApplication = "default"
@@ -54,7 +55,7 @@ func OpenSQLite(path, partyID string) (*SQLite, error) {
 		db.Close()
 		return nil, fmt.Errorf("initialize key database: %w", err)
 	}
-	return &SQLite{db: db}, nil
+	return &SQLite{db: db, partyID: partyID}, nil
 }
 
 func initSQLite(db *sql.DB, partyID string) error {
@@ -89,6 +90,9 @@ func initSQLite(db *sql.DB, partyID string) error {
 		return err
 	}
 	if err := createReshareTable(tx); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(createMasterKeyTable); err != nil {
 		return err
 	}
 	return tx.Commit()

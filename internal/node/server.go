@@ -1,10 +1,13 @@
 package node
 
 import (
+	"context"
+	"errors"
 	"log"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/C18519898242/mpc-node-api/internal/config"
@@ -51,6 +54,12 @@ func Serve(cfg config.Config) error {
 		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "rest_auth")
 		return err
 	}
+	masterKey, err := loadMasterKey(keys, cfg.EncryptorMasterPasswordEnv)
+	if err != nil {
+		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "master_key")
+		return err
+	}
+	defer clear(masterKey)
 	rest, err := net.Listen("tcp", n.config.RESTAddr)
 	if err != nil {
 		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "rest_listener")
@@ -80,4 +89,15 @@ func Serve(cfg config.Config) error {
 	n.logger.Info("node listening", "node_id", string(cfg.PartyID), "rest_port", rest.Addr().(*net.TCPAddr).Port,
 		"mpc_port", mpc.Addr().(*net.TCPAddr).Port)
 	return <-serveErrors
+}
+
+func loadMasterKey(store *keystore.SQLite, passwordEnv string) ([]byte, error) {
+	var password string
+	if passwordEnv != "" {
+		password = os.Getenv(passwordEnv)
+		if password == "" {
+			return nil, errors.New("configured master password environment variable is empty")
+		}
+	}
+	return store.LoadOrCreateMasterKey(context.Background(), password)
 }

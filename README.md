@@ -65,6 +65,21 @@ $env:MPC_NODE_API_KEY_3 = $devKeys.'3'.default
 
 启用认证后，`dev-up.ps1 -Smoke` 从 `MPC_NODE_API_KEY_1`、`MPC_NODE_API_KEY_2`、`MPC_NODE_API_KEY_3` 读取默认三节点的凭据。三个凭据需要映射到同一个应用。
 
+## 节点主密钥
+
+在节点的 JSON 配置中设置 `"encryptorMasterPasswordEnv": "MPC_NODE_1_MASTER_PASSWORD"`，再通过启动环境注入密码。三节点联调可以分别配置三个环境变量，让每个节点使用独立的密码。
+
+若本机已将三个变量写入 Git 忽略的 `certs/mpc-master-passwords.ps1`，从仓库根目录运行以下命令启动。每次重启使用同一份密码。
+
+```powershell
+. .\certs\mpc-master-passwords.ps1
+.\scripts\dev-up.ps1
+```
+
+首次启动时，节点生成随机的 32 字节 MK，用 PBKDF2-HMAC-SHA256（600,000 次、随机 16 字节盐）从密码派生 KEK，再用 AES-256-GCM 加密 MK。节点把格式版本、盐和含随机 nonce 的密文写入自己的 `node.sqlite` 的 `node_master_key` 表。后续启动用同一密码解密现有记录，再打开 REST 和 MPC 端口。密码缺失、密码错误或记录损坏时，节点会在 `master_key` 阶段退出。已有 MK 的节点仍需要该配置才能启动。
+
+未配置密码且库中没有 MK 时，节点照常启动。当前阶段只封装和加载 MK，现有私钥分片、预签名等记录沿用原来的存储格式。
+
 ## 节点版本与协议
 
 使用 `-config` 启动节点后，`GET /version` 返回服务主版本 `{"version":"1"}`。通过 `GET /info/protocols` 可查询该节点注册的 MPC 协议。

@@ -23,5 +23,6 @@
         "sha256": "zKGfxNoJcfX1ldbxo+93MLe0leevI18tb6nZUDQ8nl8="
       }
     ]
-  }
+  },
+  "encryptorMasterPasswordEnv": "MPC_NODE_2_MASTER_PASSWORD"
 }
