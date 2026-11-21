@@ -103,6 +103,9 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func validPeerSessionID(id string) bool {
+	if _, _, ok := parseKeyTransferRoute(id); ok {
+		return true
+	}
 	if _, _, ok := parseKeyCopyRoute(id); ok {
 		return true
 	}

@@ -75,6 +75,8 @@ func (n *node) registerProtocols(mux *http.ServeMux) {
 		mux.HandleFunc(base+"/{keyID}/signwithpresig", n.logRequest("signwithpresig", id, api.signWithPresign))
 		mux.HandleFunc(base+"/{keyID}/reshare", n.logRequest("reshare", id, n.reshareKey(id)))
 		mux.HandleFunc(base+"/{sourceKeyID}/keycopy", n.logRequest("keycopy", id, n.keyCopy(id)))
+		mux.HandleFunc(base+"/{keyID}/exportkey", n.logRequest("exportkey", id, n.exportKey(id)))
+		mux.HandleFunc(base+"/importkey", n.logRequest("importkey", id, n.importKey(id)))
 	}
 	mux.HandleFunc("GET /version", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

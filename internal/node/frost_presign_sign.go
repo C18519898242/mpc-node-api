@@ -63,7 +63,7 @@ func (n *node) signWithFROSTPresign(w http.ResponseWriter, r *http.Request) {
 	ids, _ := frostIDsFor(stored.Players)
 	key := &stored.Output
 	if len(request.ChainPath) != 0 {
-		secret, public, err := key.Public.DeriveShare(key.SecretKey, key.Public.GroupKey.DefaultChainCode(), request.ChainPath)
+		secret, public, err := key.Public.DeriveShare(key.SecretKey, stored.chainCode(), request.ChainPath)
 		if err != nil {
 			http.Error(w, "invalid FROST derivation path", http.StatusBadRequest)
 			return

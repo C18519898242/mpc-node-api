@@ -68,7 +68,7 @@ func (n *node) signFROST(w http.ResponseWriter, r *http.Request) {
 	n.serveSignature(w, r, id, keyID, signers, request.ChainPath, request.Message, "FROST",
 		func(ctx context.Context, session *keygenSession) ([]byte, error) {
 			if len(request.ChainPath) != 0 {
-				secret, public, err := share.Public.DeriveShare(share.SecretKey, share.Public.GroupKey.DefaultChainCode(), request.ChainPath)
+				secret, public, err := share.Public.DeriveShare(share.SecretKey, share.chainCode(), request.ChainPath)
 				if err != nil {
 					return nil, err
 				}
@@ -110,6 +110,10 @@ func (n *node) loadFROSTSigningShare(ctx context.Context, keyID string) (*stored
 		return nil, err
 	}
 	defer clear(data)
+	return n.decodeFROSTSigningShare(data)
+}
+
+func (n *node) decodeFROSTSigningShare(data []byte) (*storedFROSTShare, error) {
 	var share storedFROSTShare
 	if err := json.Unmarshal(data, &share); err != nil {
 		return nil, err
@@ -120,7 +124,7 @@ func (n *node) loadFROSTSigningShare(ctx context.Context, keyID string) (*stored
 			share.Players = party.NewIDSlice(n.config.LegacyFROSTPlayers)
 		}
 	}
-	if !share.Players.Valid() {
+	if !share.Players.Valid() || (len(share.ChainCode) != 0 && len(share.ChainCode) != 32) {
 		return nil, errors.New("invalid stored FROST player list")
 	}
 	ids, roster := frostIDsFor(share.Players)

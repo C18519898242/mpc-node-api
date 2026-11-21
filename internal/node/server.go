@@ -35,6 +35,10 @@ func httpServer(addr string, handler http.Handler) *http.Server {
 // Serve runs the REST and peer listeners for a single node.
 func Serve(cfg config.Config) error {
 	n := newNode(cfg)
+	if err := n.configureKeyTransfer(); err != nil {
+		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "key_transfer")
+		return err
+	}
 	tlsConfig, err := n.configurePeerTLS()
 	if err != nil {
 		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "mpc_tls")

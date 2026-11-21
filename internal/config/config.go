@@ -20,6 +20,12 @@ type Config struct {
 	MPCTLS                     *MPCTLSConfig       `json:"mpcTLS,omitempty"`
 	RESTAuth                   *RESTAuthConfig     `json:"restAuth,omitempty"`
 	EncryptorMasterPasswordEnv string              `json:"encryptorMasterPasswordEnv,omitempty"`
+	KeyTransfer                *KeyTransferConfig  `json:"keyTransfer,omitempty"`
+}
+
+type KeyTransferConfig struct {
+	WrappingPrivateKeyFile string   `json:"wrappingPrivateKeyFile,omitempty"`
+	ExportWrappingKeys     [][]byte `json:"exportWrappingKeys,omitempty"`
 }
 
 type RESTAuthConfig struct {
@@ -93,6 +99,10 @@ func Load(path string) (Config, error) {
 	}
 	if !filepath.IsAbs(cfg.DataDir) {
 		cfg.DataDir = filepath.Join(filepath.Dir(path), cfg.DataDir)
+	}
+	if cfg.KeyTransfer != nil && cfg.KeyTransfer.WrappingPrivateKeyFile != "" &&
+		!filepath.IsAbs(cfg.KeyTransfer.WrappingPrivateKeyFile) {
+		cfg.KeyTransfer.WrappingPrivateKeyFile = filepath.Join(filepath.Dir(path), cfg.KeyTransfer.WrappingPrivateKeyFile)
 	}
 	return cfg, os.MkdirAll(cfg.DataDir, 0700)
 }

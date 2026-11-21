@@ -195,6 +195,34 @@ ECDSA 使用 `POST /ecdsa/keys/{sourceKeyID}/keycopy`，Ed25519 使用 `POST /fr
 
 节点在同一 SQLite 事务中清空 `key_shares.share`、删除本地预签名并作废未启用的刷新分片。数据库保留已使用的 ID，防止旧会话重放后重新生成密钥。删除整组分片时，需要逐个调用持有分片的节点。
 
+## 密钥导出和导入
+
+ECDSA 和 FROST 都提供以下两个接口，使用 API Key 和与建钥相同的 MPC 会话头。
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| POST | `/{ecdsa 或 frost}/keys/{keyID}/exportkey` | 重新分享并返回 RSA 加密的节点分片 |
+| POST | `/{ecdsa 或 frost}/keys/importkey` | 用节点 RSA 私钥解密分片，重新分享并保存新 keyID |
+
+导出请求为 `{"chainPath":[],"wrappingKey":"<Base64 SPKI DER RSA 公钥>"}`。省略或清空 `chainPath` 导出根密钥，非空路径导出对应的非硬化派生密钥。每个参与节点返回自己的一份加密结果，包括 `version`、`wrappedKey` 和 `ciphertext`。包裹使用 RSA-OAEP-SHA256 加密随机 AES-256 内容密钥，AES-GCM 加密序列化的分片和 chain code。
+
+导入请求为 `{"keyID":"imported-key","threshold":2,"wrappedKeyShare":{...}}`，其中 `wrappedKeyShare` 使用对应节点的完整导出响应。同时向参与节点发请求，使用同一个全新会话 ID、目标 `keyID` 和 `threshold`。分片必须来自同一次导出，各分片与原来的 `partyId` 对应。可以在新实例上导入，目标节点要保留这些 `partyId`。导入的密钥作为新根密钥使用，继续派生时从新根开始指定路径，导出的 chain code 会一起保留。
+
+节点配置示例如下。相对路径以节点配置文件为基准。`exportWrappingKeys` 可选，用于允许向额外的 RSA SPKI DER 公钥导出，JSON 中公钥使用 Base64。节点始终允许向自己的 wrapping 公钥导出。
+
+```json
+{
+  "keyTransfer": {
+    "wrappingPrivateKeyFile": "../certs/key-transfer-dev-4096/rsa-private.pem",
+    "exportWrappingKeys": []
+  }
+}
+```
+
+本机三节点配置使用一套临时测试 RSA 密钥。新的开发环境先运行 `go run ./cmd/mpc-wrapkeygen` 生成 4096 位 RSA 密钥。私钥、PEM 公钥和 DER 公钥保存在 Git 忽略的 `certs/key-transfer-dev-4096` 下。该命令保留已有文件，避免替换已使用的解包私钥。RSA 私钥只在节点本机读取。导入保存到当前 API Key 所属应用，开启 MK 的节点会用 CEK 加密落库。
+
+导出包采用本项目版本 1 的分片格式，可供本项目节点导入。Blockdaemon SDK 的包裹格式需要单独适配。密码保护外层由调用方本地处理。
+
 ## 节点数据库
 
 `/ecdsa/keys` 和 `/frost/keys` 使用各节点 `dataDir` 下的 `node.sqlite`。默认路径为 `data/node-1/node.sqlite`、`data/node-2/node.sqlite` 和 `data/node-3/node.sqlite`。数据库会记录所属节点，拒绝用其他节点 ID 打开。
@@ -203,7 +231,7 @@ ECDSA 使用 `POST /ecdsa/keys/{sourceKeyID}/keycopy`，Ed25519 使用 `POST /fr
 
 同一建钥请求在重启后重发时，已落库的节点返回原 `keyID`。节点重启前未写完的会话会拒绝重放。如需重新建钥，请用新的会话 ID 和新的密钥 ID（或留空生成）。
 
-数据库中的分片尚未加密，仅存放开发测试密钥。数据库访问集中在 `internal/keystore`，后续可在该边界实现 MySQL 或 PostgreSQL。
+启用 MK 的节点会加密数据库中的私钥分片。数据库访问集中在 `internal/keystore`，后续可在该边界实现 MySQL 或 PostgreSQL。
 
 ## 本地运行
 

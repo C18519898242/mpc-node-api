@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"crypto/rsa"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -45,6 +46,7 @@ type node struct {
 	keyOperations map[keyOperation]int
 	keys          shareStore
 	shareCipher   *keystore.ShareCipher
+	wrappingKey   *rsa.PrivateKey
 }
 
 func newNode(cfg config.Config) *node {

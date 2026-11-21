@@ -24,5 +24,8 @@
       }
     ]
   },
-  "encryptorMasterPasswordEnv": "MPC_NODE_3_MASTER_PASSWORD"
+  "encryptorMasterPasswordEnv": "MPC_NODE_3_MASTER_PASSWORD",
+  "keyTransfer": {
+    "wrappingPrivateKeyFile": "../certs/key-transfer-dev-4096/rsa-private.pem"
+  }
 }

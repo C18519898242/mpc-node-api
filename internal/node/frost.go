@@ -63,6 +63,7 @@ func (n *node) loadFROSTPublicKey(ctx context.Context, keyID string, path []uint
 		Public struct {
 			GroupKey *eddsa.PublicKey `json:"groupkey"`
 		}
+		ChainCode []byte `json:"chainCode,omitempty"`
 	}
 	if err := json.Unmarshal(data, &share); err != nil {
 		return nil, err
@@ -72,7 +73,14 @@ func (n *node) loadFROSTPublicKey(ctx context.Context, keyID string, path []uint
 	}
 	if len(path) != 0 {
 		root := share.Public.GroupKey
-		child, _, err := root.Derive(root.DefaultChainCode(), path)
+		code := root.DefaultChainCode()
+		if len(share.ChainCode) != 0 {
+			if len(share.ChainCode) != 32 {
+				return nil, errors.New("invalid FROST chain code")
+			}
+			copy(code[:], share.ChainCode)
+		}
+		child, _, err := root.Derive(code, path)
 		if err != nil {
 			return nil, err
 		}
@@ -95,11 +103,24 @@ func (n *node) generateFROSTShare(ctx context.Context, id string, session *keyge
 
 type storedFROSTShare struct {
 	keygen.Output
-	Players party.IDSlice `json:"players,omitempty"`
+	Players   party.IDSlice `json:"players,omitempty"`
+	ChainCode []byte        `json:"chainCode,omitempty"`
 }
 
 func marshalFROSTShare(share *keygen.Output, players party.IDSlice) ([]byte, error) {
-	return json.Marshal(storedFROSTShare{Output: *share, Players: players})
+	return marshalFROSTShareWithChainCode(share, players, nil)
+}
+
+func marshalFROSTShareWithChainCode(share *keygen.Output, players party.IDSlice, code []byte) ([]byte, error) {
+	return json.Marshal(storedFROSTShare{Output: *share, Players: players, ChainCode: code})
+}
+
+func (s *storedFROSTShare) chainCode() [32]byte {
+	code := s.Public.GroupKey.DefaultChainCode()
+	if len(s.ChainCode) == 32 {
+		copy(code[:], s.ChainCode)
+	}
+	return code
 }
 
 func frostIDsFor(roster party.IDSlice) (map[party.ID]frostparty.ID, frostparty.IDSlice) {

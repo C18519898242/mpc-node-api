@@ -15,16 +15,27 @@ import (
 	"github.com/taurusgroup/multi-party-sig/pkg/math/polynomial"
 	"github.com/taurusgroup/multi-party-sig/pkg/math/sample"
 	"github.com/taurusgroup/multi-party-sig/pkg/party"
+	"github.com/taurusgroup/multi-party-sig/protocols/cmp"
 )
 
 func (n *node) copyECDSA(ctx context.Context, x *copyExchange, session *keygenSession, sourceID string) ([]byte, [32]byte, error) {
+	return n.transferECDSA(ctx, x, session, sourceID, nil, nil)
+}
+
+func (n *node) transferECDSA(ctx context.Context, x *copyExchange, session *keygenSession, sourceID string, path []uint32, imported []byte) ([]byte, [32]byte, error) {
 	var source *copySource
 	var secret curve.Scalar
 	var digest [32]byte
 	group := curve.Secp256k1{}
 	vss := secp256k1CopyGroup(group)
 	if sourceID != "" {
-		key, err := n.loadECDSAShare(ctx, sourceID, nil)
+		var key *cmp.Config
+		var err error
+		if imported != nil {
+			key, err = n.decodeCMPShare(imported)
+		} else {
+			key, err = n.loadECDSAShare(ctx, sourceID, path)
+		}
 		if err != nil {
 			return nil, digest, err
 		}
@@ -119,16 +130,39 @@ func secp256k1CopyGroup(group curve.Secp256k1) copyGroup[curve.Scalar, curve.Poi
 }
 
 func (n *node) copyFROST(ctx context.Context, x *copyExchange, session *keygenSession, sourceID string) ([]byte, [32]byte, error) {
+	return n.transferFROST(ctx, x, session, sourceID, nil, nil)
+}
+
+func (n *node) transferFROST(ctx context.Context, x *copyExchange, session *keygenSession, sourceID string, path []uint32, imported []byte) ([]byte, [32]byte, error) {
 	var source *copySource
 	var secret *ristretto.Scalar
 	var digest [32]byte
 	vss := frostCopyGroup()
 	if sourceID != "" {
-		key, err := n.loadFROSTSigningShare(ctx, sourceID)
+		var key *storedFROSTShare
+		var err error
+		if imported != nil {
+			key, err = n.decodeFROSTSigningShare(imported)
+		} else {
+			key, err = n.loadFROSTSigningShare(ctx, sourceID)
+		}
 		if err != nil {
 			return nil, digest, err
 		}
-		source = &copySource{KeyID: sourceID, Players: key.Players, Threshold: int(key.Public.Threshold)}
+		code := key.chainCode()
+		if len(path) != 0 {
+			_, derivedCode, err := key.Public.GroupKey.Derive(code, path)
+			if err != nil {
+				return nil, digest, err
+			}
+			secretKey, public, err := key.Public.DeriveShare(key.SecretKey, code, path)
+			if err != nil {
+				return nil, digest, err
+			}
+			key.Output = keygen.Output{SecretKey: secretKey, Public: public}
+			code = derivedCode
+		}
+		source = &copySource{KeyID: sourceID, Players: key.Players, Threshold: int(key.Public.Threshold), ChainCode: code[:]}
 		root := ristretto.NewIdentityElement()
 		for _, id := range key.Public.PartyIDs {
 			point := key.Public.Shares[id]
@@ -158,13 +192,13 @@ func (n *node) copyFROST(ctx context.Context, x *copyExchange, session *keygenSe
 		return nil, digest, err
 	}
 	root, err := vss.decodePoint(copied.source.Root)
-	if err != nil || !public.GroupKey.Equal(eddsa.NewPublicKeyFromPoint(root)) || len(copied.source.ChainCode) != 0 {
+	if err != nil || !public.GroupKey.Equal(eddsa.NewPublicKeyFromPoint(root)) || len(copied.source.ChainCode) != 32 {
 		return nil, digest, errors.New("copied FROST public key differs from source")
 	}
 	output := &keygen.Output{
 		Public: public, SecretKey: eddsa.NewSecretShare(ids[n.config.PartyID], copied.secret),
 	}
-	encoded, err := marshalFROSTShare(output, x.players)
+	encoded, err := marshalFROSTShareWithChainCode(output, x.players, copied.source.ChainCode)
 	return encoded, copied.transcript, err
 }
 

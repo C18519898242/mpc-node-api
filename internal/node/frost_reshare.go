@@ -124,7 +124,7 @@ func (n *node) refreshFROST(ctx context.Context, keyID, route string, session *k
 	if err != nil {
 		return nil, epoch, err
 	}
-	data, err := marshalFROSTShare(&keygen.Output{SecretKey: localShare, Public: refreshed}, roster)
+	data, err := marshalFROSTShareWithChainCode(&keygen.Output{SecretKey: localShare, Public: refreshed}, roster, current.ChainCode)
 	return data, sha256.Sum256(public), err
 }
 
