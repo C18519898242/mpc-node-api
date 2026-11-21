@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -225,8 +226,56 @@ func TestKeyTransferRoundTrip(t *testing.T) {
 				t.Fatal("export changed the original sharing")
 			}
 			clear(after)
+
+			// Export and restore one node while every outgoing peer request fails
+			// the test. The restored bytes must match the original local share.
+			for _, n := range nodes {
+				n.client.Transport = noBackupPeerTransport{}
+			}
+			local := call(0, "a", base+"/source/exportkeyshare", "", map[string]any{"wrappingKey": der})
+			if local.Code != 200 {
+				t.Fatalf("local export: %d (%s)", local.Code, local.Body.String())
+			}
+			if got := call(0, "b", base+"/source/exportkeyshare", "", map[string]any{"wrappingKey": der}); got.Code != 404 {
+				t.Fatalf("another application exported the local share: %d", got.Code)
+			}
+			var wrapped wrappedKeyShare
+			if err := json.Unmarshal(local.Body.Bytes(), &wrapped); err != nil {
+				t.Fatal(err)
+			}
+			request := map[string]any{"wrappedKeyShare": wrapped}
+			if got := call(1, "a", base+"/importkeyshare", "", request); got.Code != 400 {
+				t.Fatalf("backup accepted for another node: %d", got.Code)
+			}
+			expectedPublic := getPublic("source", nil)
+			cfgs[0].DataDir = t.TempDir()
+			open(0)
+			nodes[0].client.Transport = noBackupPeerTransport{}
+			if got := call(0, "b", base+"/importkeyshare", "", request); got.Code != 403 {
+				t.Fatalf("another application imported the local share: %d", got.Code)
+			}
+			for range 2 {
+				got := call(0, "a", base+"/importkeyshare", "", request)
+				if got.Code != 200 || !strings.Contains(got.Body.String(), `"keyID":"source"`) {
+					t.Fatalf("local import: %d (%s)", got.Code, got.Body.String())
+				}
+			}
+			restored, err := nodes[0].keys.Load(ctx, "a", algorithm, "source")
+			if err != nil || !bytes.Equal(restored, original) {
+				t.Fatalf("local backup changed the share: %v", err)
+			}
+			clear(restored)
+			if !bytes.Equal(getPublic("source", nil), expectedPublic) {
+				t.Fatal("local restore changed the public key")
+			}
 		})
 	}
+}
+
+type noBackupPeerTransport struct{}
+
+func (noBackupPeerTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	panic("local share backup must not contact MPC peers")
 }
 
 func TestKeyWrapRejectsWrongKey(t *testing.T) {

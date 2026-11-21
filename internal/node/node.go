@@ -17,6 +17,8 @@ type shareStore interface {
 	Reserve(context.Context, string, keystore.Key) (keystore.Reservation, error)
 	Save(context.Context, string, keystore.Key, []byte) error
 	Load(context.Context, string, string, string) ([]byte, error)
+	ExportKeyShare(context.Context, string, string, string) (keystore.KeyShareBackup, error)
+	RestoreKeyShare(context.Context, string, keystore.KeyShareBackup) error
 	DeleteKeyShare(context.Context, string, string) error
 	ReserveECDSAPresign(context.Context, string, string, string, [32]byte) (keystore.Reservation, []string, error)
 	SaveECDSAPresign(context.Context, string, string, []keystore.Presignature) ([]string, error)

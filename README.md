@@ -223,6 +223,16 @@ ECDSA 和 FROST 都提供以下两个接口，使用 API Key 和与建钥相同�
 
 导出包采用本项目版本 1 的分片格式，可供本项目节点导入。Blockdaemon SDK 的包裹格式需要单独适配。密码保护外层由调用方本地处理。
 
+### 单节点分片备份
+
+ECDSA 和 FROST 还提供 `POST /{algorithm}/keys/{keyID}/exportkeyshare` 和 `POST /{algorithm}/keys/importkeyshare`，分别备份和恢复该节点的原始分片。这两个接口只需要 API Key，无需 MPC 会话头和对端节点在线。
+
+导出请求为 `{"wrappingKey":"<Base64 SPKI DER RSA 公钥>"}`，响应仍包含 `version`、`wrappedKey`、`ciphertext`。导入请求为 `{"wrappedKeyShare":{...}}`，使用完整导出响应作为 `wrappedKeyShare`。RSA 包裹密钥和白名单配置与 `exportkey` 共用。
+
+备份携带原节点 ID、应用 ID、`keyID`、建钥会话 ID、阈值、创建时间及原始分片。恢复后返回原 `keyID`，需要匹配原 `partyId` 和原 `applicationID`。原记录缺失或分片已删除时可以恢复，同一份现存分片的重复导入成功返回。现存记录的分片或会话参数不同、分片刷新处于待提交状态时返回 409。已启用 MK 的节点在恢复时用自己的 CEK 加密保存。
+
+这两个接口只处理私钥分片，不携带预签名。分片刷新后请重新备份，恢复的分片需要与其他节点属于同一次分享。单节点备份包与 `exportkey` 的重新分享包分别通过各自的接口导入。
+
 ## 节点数据库
 
 `/ecdsa/keys` 和 `/frost/keys` 使用各节点 `dataDir` 下的 `node.sqlite`。默认路径为 `data/node-1/node.sqlite`、`data/node-2/node.sqlite` 和 `data/node-3/node.sqlite`。数据库会记录所属节点，拒绝用其他节点 ID 打开。
