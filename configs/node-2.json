@@ -25,7 +25,12 @@
     ]
   },
   "encryptorMasterPasswordEnv": "MPC_NODE_2_MASTER_PASSWORD",
+  "emergencyRecovery": {
+    "enabled": false,
+    "publicKeys": []
+  },
   "keyTransfer": {
+    "exportEnabled": false,
     "wrappingPrivateKeyFile": "../certs/key-transfer-dev-4096/rsa-private.pem"
   }
 }

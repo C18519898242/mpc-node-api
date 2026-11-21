@@ -208,11 +208,14 @@ ECDSA 和 FROST 都提供以下两个接口，使用 API Key 和与建钥相同�
 
 导入请求为 `{"keyID":"imported-key","threshold":2,"wrappedKeyShare":{...}}`，其中 `wrappedKeyShare` 使用对应节点的完整导出响应。同时向参与节点发请求，使用同一个全新会话 ID、目标 `keyID` 和 `threshold`。分片必须来自同一次导出，各分片与原来的 `partyId` 对应。可以在新实例上导入，目标节点要保留这些 `partyId`。导入的密钥作为新根密钥使用，继续派生时从新根开始指定路径，导出的 chain code 会一起保留。
 
-节点配置示例如下。相对路径以节点配置文件为基准。`exportWrappingKeys` 可选，用于允许向额外的 RSA SPKI DER 公钥导出，JSON 中公钥使用 Base64。节点始终允许向自己的 wrapping 公钥导出。
+导出默认关闭。只有显式设置 `keyTransfer.exportEnabled = true`，才会开放 ECDSA 和 FROST 的 `exportkey`、`exportkeyshare`。省略配置或设为 `false` 时，这些接口返回 403。仓库中的三个节点配置均将其设为 `false`，启用后需要重启节点。导入接口沿用自己的 RSA 私钥配置。
+
+以下示例开启导出。相对路径以节点配置文件为基准。`exportWrappingKeys` 可选，用于允许向额外的 RSA SPKI DER 公钥导出，JSON 中公钥使用 Base64。启用导出后，节点允许向自己的 wrapping 公钥导出。
 
 ```json
 {
   "keyTransfer": {
+    "exportEnabled": true,
     "wrappingPrivateKeyFile": "../certs/key-transfer-dev-4096/rsa-private.pem",
     "exportWrappingKeys": []
   }
@@ -232,6 +235,12 @@ ECDSA 和 FROST 还提供 `POST /{algorithm}/keys/{keyID}/exportkeyshare` 和 `P
 备份携带原节点 ID、应用 ID、`keyID`、建钥会话 ID、阈值、创建时间及原始分片。恢复后返回原 `keyID`，需要匹配原 `partyId` 和原 `applicationID`。原记录缺失或分片已删除时可以恢复，同一份现存分片的重复导入成功返回。现存记录的分片或会话参数不同、分片刷新处于待提交状态时返回 409。已启用 MK 的节点在恢复时用自己的 CEK 加密保存。
 
 这两个接口只处理私钥分片，不携带预签名。分片刷新后请重新备份，恢复的分片需要与其他节点属于同一次分享。单节点备份包与 `exportkey` 的重新分享包分别通过各自的接口导入。
+
+### 紧急恢复完整私钥（ERS）
+
+ECDSA 和 FROST 新增 `POST /{algorithm}/keys/{keyID}/recoverydata`。参与节点用同一会话确认参数后，各自返回 RSA 加密、带公开可验证证明的恢复数据。节点不会拼出完整私钥，也不需要持有恢复 RSA 私钥。
+
+`emergencyRecovery.enabled` 默认 `false`，与普通导出的 `keyTransfer.exportEnabled` 独立。启用时必须配置可信 RSA 公钥白名单。离线工具 `cmd/mpc-recovery` 提供 `combine`、`validate`、`recover`，收集 `threshold + 1` 份数据后可在全部节点关闭时恢复根私钥和 chain code。恢复数据使用本项目格式。配置、调用示例、证明方案和限制见 [紧急恢复说明](docs/emergency-recovery.md)。
 
 ## 节点数据库
 

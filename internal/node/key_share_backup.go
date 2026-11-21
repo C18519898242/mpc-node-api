@@ -21,6 +21,10 @@ type localKeySharePayload struct {
 
 func (n *node) exportLocalKeyShare(algorithm string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if n.config.KeyTransfer == nil || !n.config.KeyTransfer.ExportEnabled {
+			http.Error(w, "key export is disabled", http.StatusForbidden)
+			return
+		}
 		keyID := r.PathValue("keyID")
 		var request struct {
 			WrappingKey []byte `json:"wrappingKey"`

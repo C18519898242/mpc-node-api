@@ -44,11 +44,11 @@ func parseKeyTransferRoute(route string) (string, string, bool) {
 	prefix, sid, ok := strings.Cut(route, ".")
 	algorithm, operation, found := strings.Cut(prefix, "-")
 	return algorithm, operation, ok && found && (algorithm == "ecdsa" || algorithm == "frost") &&
-		(operation == "export" || operation == "import") && memorySessionPattern.MatchString(sid)
+		(operation == "export" || operation == "import" || operation == "recovery") && memorySessionPattern.MatchString(sid)
 }
 
 func (n *node) allowWrappingKey(key *rsa.PublicKey) bool {
-	if n.config.KeyTransfer == nil {
+	if n.config.KeyTransfer == nil || !n.config.KeyTransfer.ExportEnabled {
 		return false
 	}
 	der, _ := x509.MarshalPKIXPublicKey(key)
@@ -68,6 +68,10 @@ func (n *node) allowWrappingKey(key *rsa.PublicKey) bool {
 
 func (n *node) exportKey(algorithm string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if n.config.KeyTransfer == nil || !n.config.KeyTransfer.ExportEnabled {
+			http.Error(w, "key export is disabled", http.StatusForbidden)
+			return
+		}
 		keyID := r.PathValue("keyID")
 		sid := r.Header.Get("MPC-SessionID")
 		var request struct {

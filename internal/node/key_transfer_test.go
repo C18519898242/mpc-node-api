@@ -20,6 +20,7 @@ import (
 
 	"github.com/C18519898242/mpc-node-api/internal/config"
 	"github.com/C18519898242/mpc-node-api/internal/keystore"
+	"github.com/C18519898242/mpc-node-api/internal/recovery"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	secpECDSA "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"github.com/taurusgroup/multi-party-sig/pkg/party"
@@ -67,7 +68,8 @@ func TestKeyTransferRoundTrip(t *testing.T) {
 				cfgs[i] = config.Config{
 					PartyID: party.ID(fmt.Sprint(i + 1)), DataDir: t.TempDir(),
 					Peers:    map[party.ID]string{party.ID(fmt.Sprint(2 - i)): fmt.Sprint(2 - i)},
-					RESTAuth: &config.RESTAuthConfig{}, KeyTransfer: &config.KeyTransferConfig{},
+					RESTAuth: &config.RESTAuthConfig{}, KeyTransfer: &config.KeyTransferConfig{ExportEnabled: true},
+					EmergencyRecovery: &config.EmergencyRecoveryConfig{Enabled: true, PublicKeys: [][]byte{der}},
 				}
 				for _, app := range []string{"a", "b"} {
 					digest := sha256.Sum256([]byte("fixture-" + app))
@@ -132,6 +134,49 @@ func TestKeyTransferRoundTrip(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer clear(original)
+			// Recovery verification and reconstruction do not use a node or its DB.
+			recoveryBody := map[string]any{"recoveryKey": der, "label": []byte("roundtrip")}
+			mismatched := make(chan *httptest.ResponseRecorder, 2)
+			go func() { mismatched <- call(0, "a", base+"/source/recoverydata", "mismatched-recovery", recoveryBody) }()
+			go func() {
+				mismatched <- call(1, "a", base+"/source/recoverydata", "mismatched-recovery", map[string]any{"recoveryKey": der, "label": []byte("other node label")})
+			}()
+			for range 2 {
+				if w := <-mismatched; w.Code != 500 {
+					t.Fatalf("nodes accepted mismatched recovery parameters: %d", w.Code)
+				}
+			}
+			if w := call(0, "b", base+"/source/recoverydata", "foreign-recovery", recoveryBody); w.Code != 404 {
+				t.Fatalf("another application recovered a key: %d", w.Code)
+			}
+			recoveryReplies := all(base+"/source/recoverydata", "recovery", both(recoveryBody))
+			partials := make([]recovery.Partial, 2)
+			for i, w := range recoveryReplies {
+				if err := json.Unmarshal(w.Body.Bytes(), &partials[i]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rootPublic := getPublic("source", nil)
+			backup, err := recovery.Combine(partials, rootPublic, &wrapping.PublicKey, []byte("roundtrip"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			recovered, err := recovery.Recover(backup, rootPublic, wrapping, []byte("roundtrip"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer clear(recovered.PrivateKey)
+			if !bytes.Equal(recovered.PublicKey, rootPublic) {
+				t.Fatal("offline recovery changed the public key")
+			}
+			assertRecoveredDerivation(t, algorithm, recovered, getPublic("source", []uint32{0, 1}))
+			if w := call(0, "a", base+"/source/recoverydata", "recovery", recoveryBody); w.Code != 200 || !bytes.Equal(w.Body.Bytes(), recoveryReplies[0].Body.Bytes()) {
+				t.Fatal("identical recovery retry changed the backup")
+			}
+			recoveryBody["label"] = []byte("different label")
+			if w := call(0, "a", base+"/source/recoverydata", "recovery", recoveryBody); w.Code != 409 {
+				t.Fatalf("recovery session parameter reuse returned %d", w.Code)
+			}
 			for _, path := range [][]uint32{nil, {0, 1}} {
 				name := "root"
 				if len(path) != 0 {
@@ -294,7 +339,7 @@ func TestKeyWrapRejectsWrongKey(t *testing.T) {
 	if _, err := unwrapKeyShare(second, sealed); err == nil {
 		t.Fatal("another RSA key decrypted the export")
 	}
-	n := newNode(config.Config{KeyTransfer: &config.KeyTransferConfig{}})
+	n := newNode(config.Config{KeyTransfer: &config.KeyTransferConfig{ExportEnabled: true}})
 	n.wrappingKey = first
 	if !n.allowWrappingKey(&first.PublicKey) || n.allowWrappingKey(&second.PublicKey) {
 		t.Fatal("export wrapping key policy did not enforce the allowlist")

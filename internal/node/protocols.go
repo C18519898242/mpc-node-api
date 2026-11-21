@@ -79,6 +79,7 @@ func (n *node) registerProtocols(mux *http.ServeMux) {
 		mux.HandleFunc(base+"/importkey", n.logRequest("importkey", id, n.importKey(id)))
 		mux.HandleFunc(base+"/{keyID}/exportkeyshare", n.logRequest("exportkeyshare", id, n.exportLocalKeyShare(id)))
 		mux.HandleFunc(base+"/importkeyshare", n.logRequest("importkeyshare", id, n.importLocalKeyShare(id)))
+		mux.HandleFunc(base+"/{keyID}/recoverydata", n.logRequest("recoverydata", id, n.generateRecoveryData(id)))
 	}
 	mux.HandleFunc("GET /version", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
