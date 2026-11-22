@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,13 @@ func run(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	var backupPassword string
+	if cmd.mode == "exportkeyshare" {
+		backupPassword = os.Getenv(cmd.backupPasswordEnv)
+		if backupPassword == "" {
+			return errors.New("missing backup password environment variable")
+		}
+	}
 	settings, err := loadSettings(cmd.configPath)
 	if err != nil {
 		return err
@@ -40,8 +48,13 @@ func run(args []string, out io.Writer) error {
 		result, err = client.GeneratePresignatures(cmd.algorithm, cmd.keyID, cmd.count)
 	case "signwithpresig":
 		result, err = client.SignWithPresignatureAndPath(cmd.algorithm, cmd.keyID, cmd.presignatureID, []byte(cmd.message), cmd.chainPath)
+	case "exportkeyshare":
+		result, err = client.ExportKeyShare(cmd.algorithm, cmd.keyID, backupPassword)
 	}
 	if err != nil {
+		if cmd.mode == "exportkeyshare" {
+			return errors.New("could not export local share; check key ID, backup password strength and key state")
+		}
 		if cmd.mode == "signwithpresig" {
 			return errors.New("presign signing failed; discard this presignature ID and use a new one")
 		}
@@ -49,6 +62,17 @@ func run(args []string, out io.Writer) error {
 	}
 	if err := client.Close(); err != nil {
 		return errors.New("cannot close mobile node")
+	}
+	if cmd.mode == "exportkeyshare" {
+		if err := writeBackupFile(cmd.outPath, []byte(result)); err != nil {
+			return errors.New("cannot create backup file; check path and ensure the file does not already exist")
+		}
+		public, _ := json.Marshal(struct {
+			KeyID     string `json:"keyID"`
+			Algorithm string `json:"algorithm"`
+			File      string `json:"file"`
+		}{cmd.keyID, cmd.algorithm, cmd.outPath})
+		result = string(public)
 	}
 	_, err = fmt.Fprintln(out, result)
 	return err

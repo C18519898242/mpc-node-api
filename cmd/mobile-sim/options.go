@@ -19,12 +19,13 @@ type command struct {
 	count                                       int
 	presignatureID                              string
 	chainPath                                   string
+	backupPasswordEnv, outPath                  string
 }
 
 func parseCommand(args []string) (command, error) {
 	var cmd command
-	if len(args) == 0 || (args[0] != "keygen" && args[0] != "sign" && args[0] != "presiggen" && args[0] != "signwithpresig") {
-		return cmd, errors.New("expected keygen, sign, presiggen or signwithpresig")
+	if len(args) == 0 || (args[0] != "keygen" && args[0] != "sign" && args[0] != "presiggen" && args[0] != "signwithpresig" && args[0] != "exportkeyshare") {
+		return cmd, errors.New("expected keygen, sign, presiggen, signwithpresig or exportkeyshare")
 	}
 	cmd.mode = args[0]
 	flags := flag.NewFlagSet(cmd.mode, flag.ContinueOnError)
@@ -37,6 +38,9 @@ func parseCommand(args []string) (command, error) {
 		flags.IntVar(&cmd.threshold, "threshold", 2, "protocol threshold; positive and less than party count")
 	case "presiggen":
 		flags.IntVar(&cmd.count, "count", 1, "presignature batch size (1 to 8)")
+	case "exportkeyshare":
+		flags.StringVar(&cmd.backupPasswordEnv, "backup-password-env", "MPC_MOBILE_BACKUP_PASSWORD", "environment variable containing the independent backup password")
+		flags.StringVar(&cmd.outPath, "out", "", "new encrypted backup file; existing files are never overwritten")
 	case "sign", "signwithpresig":
 		flags.StringVar(&cmd.message, "message", "", "UTF-8 message to sign")
 		flags.StringVar(&cmd.chainPath, "chain-path", "[]", "non-hardened derivation path as a JSON array, e.g. [0,1]")
@@ -55,6 +59,9 @@ func parseCommand(args []string) (command, error) {
 		if err != nil || len(id) != 32 {
 			return cmd, errors.New("expected an explicit valid presignature-id")
 		}
+	}
+	if cmd.mode == "exportkeyshare" && (strings.TrimSpace(cmd.outPath) == "" || strings.TrimSpace(cmd.backupPasswordEnv) == "") {
+		return cmd, errors.New("exportkeyshare requires out and backup-password-env")
 	}
 	if cmd.mode == "sign" || cmd.mode == "signwithpresig" {
 		var path []*uint32

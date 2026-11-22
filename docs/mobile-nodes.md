@@ -72,6 +72,55 @@ ECDSA 同样使用这个参数。省略参数、`[]` 或 `null` 表示根密钥�
 
 手机先按同一路径获取本地子公钥，再把路径传给所有参与节点，使用该子公钥验证最终签名。响应中的 `keyID` 仍是根密钥 ID，`publicKey` 是实际用于签名的子公钥。SQLite 继续只保存根密钥分片，不增加子密钥记录，也不覆盖根分片。
 
+## 本地密码加密分片备份
+
+手机 SDK 的 `ExportKeyShare(algorithm, keyID, backupPassword)` 导出本机根密钥的原始协议分片。ECDSA 和 FROST 均支持。操作只读取手机本地数据库，不发起网络请求，也不需要其他节点在线或开启服务器的 RSA 导出开关。
+
+导出时使用本机 MK/CEK 在内存中解密分片，再用独立备份密码派生的 AES 密钥重新加密。备份保留原 `partyID`、`applicationID`、`keyID`、建钥会话、阈值、创建时间，以及签名和派生所需的完整分片数据；不携带 MK、主密码、API Key、证书或预签名。导出不改变原分片和可用预签名数量。分片刷新待提交时拒绝导出；刷新完成后应重新备份。
+
+备份密码至少 16 个字符，不能全为空白；这只是最低长度校验，请使用独立的高强度口令。密码不会写入文件或日志，忘记后无法解密备份。它与本机数据库的主密码是两个独立用途，恢复不需要原设备的 MK 或主密码。
+
+CLI 增加 `exportkeyshare`，密码仅通过环境变量读取，不接受明文密码命令行参数。在已加载手机主密码、API Key 环境变量的终端运行，服务端可以保持关闭：
+
+```powershell
+$secret = Read-Host '请输入独立备份密码（至少16字符）' -AsSecureString
+try {
+    $env:MPC_MOBILE_BACKUP_PASSWORD = [Net.NetworkCredential]::new('', $secret).Password
+    go run ./cmd/mobile-sim exportkeyshare -config configs/mobile/mobile.json -algorithm frost -key-id phone-frost-1 -out data/phone-frost-1.backup.json
+} finally {
+    Remove-Item Env:\MPC_MOBILE_BACKUP_PASSWORD -ErrorAction SilentlyContinue
+    $secret.Dispose()
+}
+```
+
+ECDSA 使用相同命令并指定 `-algorithm ecdsa` 和对应的 `keyID`。可用 `-backup-password-env OTHER_ENV` 指定其他环境变量名。`-out` 必填，目标目录必须存在；现存文件不会覆盖。CLI 在同步文件写入后输出 `keyID`、`algorithm`、`file` 的 JSON 摘要，备份密文不打印到 stdout。Unix 文件权限为 `0600`；Windows 的访问控制由目标目录 ACL 决定。当前 CLI 沿用手机运行时初始化流程，仍需本地配置的 TLS 文件和环境变量，读取这些配置不会联系服务端。
+
+SDK 用法：
+
+```go
+backupJSON, err := client.ExportKeyShare("frost", "phone-key-1", backupPassword)
+// 检查 err，再将 backupJSON 保存到用户选择的文件；勿记录密码或备份内容。
+```
+
+外层 JSON 格式为版本 1：
+
+```json
+{
+  "version": 1,
+  "kind": "mpc-node-api/mobile-key-share-backup",
+  "kdf": "PBKDF2-HMAC-SHA256",
+  "iterations": 600000,
+  "cipher": "AES-256-GCM",
+  "salt": "<16字节随机盐的Base64>",
+  "nonce": "<12字节随机nonce的Base64>",
+  "ciphertext": "<密文及16字节认证标签的Base64>"
+}
+```
+
+每次导出使用新的 salt 和 nonce，密码派生 32 字节 AES 密钥。前六个字段（`version` 到 `salt`）按上述顺序编码成无空格、无换行的紧凑 JSON，作为 GCM AAD；解密端必须使用相同的字段顺序及格式，并先校验版本和算法参数。解密后的内容沿用普通节点的 `local-key-share` 分片备份结构。
+
+此版本先开放导出，没有新增手机导入接口；密码备份包不能直接传给普通节点的 RSA `importkeyshare`。测试使用独立解密器验证错误密码、篡改拒绝及完整内容，并将分片恢复到全新 MK/主密码的数据库后完成派生签名。后续导入需保留原 `partyID`、`applicationID` 和分片代次，以新设备的 MK/CEK 加密落库，不恢复旧预签名。
+
 ## 配置和实际存储位置
 
 相对路径均按 JSON 配置所在目录解析。手机配置 `configs/mobile/mobile.json` 的 `dataDir` 为 `../../data/mobile-sim`，因此默认实际数据库为 `<仓库根目录>\data\mobile-sim\node.sqlite`；脚本启动时会打印绝对路径。

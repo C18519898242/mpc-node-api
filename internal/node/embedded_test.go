@@ -124,6 +124,7 @@ func TestEmbeddedMobileCreateReopenAndSign(t *testing.T) {
 			if json.Unmarshal([]byte(batch), &presigns) != nil || len(presigns.IDs) != 2 || presigns.IDs[0] == presigns.IDs[1] {
 				t.Fatal("invalid mobile presign batch")
 			}
+			testMobilePasswordShareBackup(t, client, cfg, app, credentials, algorithm, keyID)
 			if err := client.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -328,6 +329,9 @@ func TestEmbeddedMobileCreateReopenAndSign(t *testing.T) {
 			}
 			if _, err := client.GeneratePresignatures(algorithm, keyID, 1); err == nil {
 				t.Fatal("closed embedded client generated presignatures")
+			}
+			if _, err := client.ExportKeyShare(algorithm, keyID, "independent backup password"); err == nil {
+				t.Fatal("closed embedded client exported a share")
 			}
 			if _, err := client.SignWithPresignature(algorithm, keyID, presigns.IDs[1], nil); err == nil {
 				t.Fatal("closed embedded client consumed a presignature")

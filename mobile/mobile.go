@@ -67,6 +67,12 @@ func (c *Client) SignWithPresignatureAndPath(algorithm, keyID, presignatureID st
 	return c.embedded.SignWithPresignatureAndPath(algorithm, keyID, presignatureID, message, path)
 }
 
+// ExportKeyShare returns a password-encrypted JSON backup of this device's
+// original protocol share. It performs no network requests and exports no MK.
+func (c *Client) ExportKeyShare(algorithm, keyID, backupPassword string) (string, error) {
+	return c.embedded.ExportKeyShare(algorithm, keyID, backupPassword)
+}
+
 func parseChainPath(raw string) ([]uint32, error) {
 	var indices []*uint32
 	if raw == "" {

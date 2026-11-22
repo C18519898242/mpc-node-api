@@ -27,10 +27,21 @@ func TestCommandRejectsInvalidInputsBeforeOpeningStorage(t *testing.T) {
 		{"sign", "-key-id", "key", "-chain-path", "[2147483648]"},
 		{"sign", "-key-id", "key", "-chain-path", "[4294967296]"},
 		{"presiggen", "-key-id", "key", "-chain-path", "[0,1]"},
+		{"exportkeyshare", "-key-id", "key"},
+		{"exportkeyshare", "-out", "backup.json"},
+		{"exportkeyshare", "-key-id", "key", "-out", "backup.json", "-backup-password", "secret"},
 	} {
 		if _, err := parseCommand(args); err == nil {
 			t.Fatalf("accepted invalid arguments: %v", args)
 		}
+	}
+}
+
+func TestExportKeyShareCommand(t *testing.T) {
+	args := []string{"exportkeyshare", "-algorithm", "frost", "-key-id", "phone-key", "-out", "backup.json", "-backup-password-env", "PHONE_BACKUP_PASSWORD"}
+	cmd, err := parseCommand(args)
+	if err != nil || cmd.mode != "exportkeyshare" || cmd.keyID != "phone-key" {
+		t.Fatalf("local export command rejected: %v", err)
 	}
 }
 
