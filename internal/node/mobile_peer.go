@@ -19,6 +19,9 @@ type mobileMailboxKey struct {
 }
 
 func mobileRoute(route string) bool {
+	if _, _, ok := splitPresignRoute(route); ok {
+		return true
+	}
 	for _, prefix := range []string{ecdsaSessionPrefix, frostSessionPrefix, ecdsaSignPrefix, frostSignPrefix} {
 		if sid, ok := strings.CutPrefix(route, prefix); ok {
 			return memorySessionPattern.MatchString(sid)
@@ -57,14 +60,13 @@ func (n *node) registerMobileRoutes(mux *http.ServeMux) {
 	if len(n.config.MobilePeers) == 0 {
 		return
 	}
-	for _, p := range []struct {
-		id           string
-		create, sign http.HandlerFunc
-	}{
-		{"ecdsa", n.generateECDSAKey, n.signECDSA}, {"frost", n.generateFROSTKey, n.signFROST},
-	} {
-		mux.HandleFunc("POST /internal/mobile/"+p.id+"/keys", n.authorizeMobile(p.create, true))
-		mux.HandleFunc("POST /internal/mobile/"+p.id+"/keys/{keyID}/sign", n.authorizeMobile(p.sign, true))
+	for _, p := range []nodeProtocol{cmpProtocol{n}, frostProtocol{n}} {
+		base := "POST /internal/mobile/" + p.Info().ID + "/keys"
+		api := p.handlers()
+		mux.HandleFunc(base, n.authorizeMobile(api.generateKey, true))
+		mux.HandleFunc(base+"/{keyID}/sign", n.authorizeMobile(api.sign, true))
+		mux.HandleFunc(base+"/{keyID}/{count}/presiggen", n.authorizeMobile(n.logRequest("presiggen", p.Info().ID, api.generatePresign), true))
+		mux.HandleFunc(base+"/{keyID}/signwithpresig", n.authorizeMobile(n.logRequest("signwithpresig", p.Info().ID, api.signWithPresign), false))
 	}
 	mux.HandleFunc("POST /internal/mobile/poll", n.authorizeMobile(n.pollMobile, false))
 }

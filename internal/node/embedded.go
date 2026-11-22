@@ -104,10 +104,11 @@ func (e *Embedded) Close() error {
 }
 
 type mobileKeyResult struct {
-	KeyID     string `json:"keyID"`
-	Curve     string `json:"curve"`
-	PublicKey []byte `json:"publicKey"`
-	Signature []byte `json:"signature,omitempty"`
+	KeyID          string `json:"keyID"`
+	PresignatureID string `json:"presignatureId,omitempty"`
+	Curve          string `json:"curve"`
+	PublicKey      []byte `json:"publicKey"`
+	Signature      []byte `json:"signature,omitempty"`
 }
 
 func (e *Embedded) CreateKey(algorithm string, threshold int, keyID string) (string, error) {

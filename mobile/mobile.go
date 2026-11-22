@@ -42,4 +42,10 @@ func (c *Client) CreateKey(algorithm string, threshold int, keyID string) (strin
 func (c *Client) Sign(algorithm, keyID string, message []byte) (string, error) {
 	return c.embedded.Sign(algorithm, keyID, message)
 }
+func (c *Client) GeneratePresignatures(algorithm, keyID string, count int) (string, error) {
+	return c.embedded.GeneratePresignatures(algorithm, keyID, count)
+}
+func (c *Client) SignWithPresignature(algorithm, keyID, presignatureID string, message []byte) (string, error) {
+	return c.embedded.SignWithPresignature(algorithm, keyID, presignatureID, message)
+}
 func (c *Client) Close() error { return c.embedded.Close() }

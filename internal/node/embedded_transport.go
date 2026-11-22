@@ -16,7 +16,7 @@ import (
 	"github.com/taurusgroup/multi-party-sig/pkg/protocol"
 )
 
-func (e *Embedded) coordinate(path, route, sid string, body []byte) ([]byte, error) {
+func (e *Embedded) coordinate(path, route, sid string, body []byte, pollRoutes ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(e.ctx, keygenTimeout+5*time.Second)
 	defer cancel()
 	e.node.workerContext = ctx
@@ -28,17 +28,22 @@ func (e *Embedded) coordinate(path, route, sid string, body []byte) ([]byte, err
 	pollErrors := make(chan error, 1)
 	pollCtx, stopPolls := context.WithCancel(ctx)
 	var polls sync.WaitGroup
+	if len(pollRoutes) == 0 {
+		pollRoutes = []string{route}
+	}
 	for peer := range e.node.config.Peers {
-		polls.Add(1)
-		go func() {
-			defer polls.Done()
-			if err := e.pollPeer(pollCtx, peer, route); err != nil && pollCtx.Err() == nil {
-				select {
-				case pollErrors <- err:
-				default:
+		for _, pollRoute := range pollRoutes {
+			polls.Add(1)
+			go func() {
+				defer polls.Done()
+				if err := e.pollPeer(pollCtx, peer, pollRoute); err != nil && pollCtx.Err() == nil {
+					select {
+					case pollErrors <- err:
+					default:
+					}
 				}
-			}
-		}()
+			}()
+		}
 		go func() {
 			data, err := e.remoteCall(ctx, peer, "/internal/mobile"+path, sid, body, false)
 			responses <- result{data, err}

@@ -15,9 +15,25 @@ func TestCommandRejectsInvalidInputsBeforeOpeningStorage(t *testing.T) {
 		{"sign", "-algorithm", "frost"},
 		{"sign", "-key-id", "key", "extra"},
 		{"sign", "-key-id", "key", "-threshold", "2"},
+		{"presiggen"}, {"presiggen", "-key-id", "key", "-count", "0"},
+		{"presiggen", "-key-id", "key", "-count", "9"},
+		{"signwithpresig", "-key-id", "key"},
+		{"signwithpresig", "-key-id", "key", "-presignature-id", "invalid"},
 	} {
 		if _, err := parseCommand(args); err == nil {
 			t.Fatalf("accepted invalid arguments: %v", args)
+		}
+	}
+}
+
+func TestPresignCommands(t *testing.T) {
+	for _, args := range [][]string{
+		{"presiggen", "-algorithm", "frost", "-key-id", "key", "-count", "2"},
+		{"signwithpresig", "-algorithm", "ecdsa", "-key-id", "key", "-presignature-id", strings.Repeat("A", 43), "-message", "你好"},
+	} {
+		cmd, err := parseCommand(args)
+		if err != nil || cmd.mode != args[0] || cmd.keyID != "key" {
+			t.Fatalf("mobile presign command rejected: %v, %v", args, err)
 		}
 	}
 }

@@ -168,7 +168,7 @@ func (n *node) beginPresign(ctx context.Context, id, keyID string, binding [32]b
 		session.presignInboxes[i] = make(chan *protocol.Message, 32)
 	}
 	n.sessions[sessionKey{applicationID(ctx), id}] = session
-	go n.runPresign(context.WithoutCancel(ctx), id, session, algorithm, generate, save)
+	go n.runPresign(n.operationContext(ctx), id, session, algorithm, generate, save)
 	return session, nil
 }
 

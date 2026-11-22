@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,12 +16,14 @@ import (
 type command struct {
 	mode, configPath, algorithm, keyID, message string
 	threshold                                   int
+	count                                       int
+	presignatureID                              string
 }
 
 func parseCommand(args []string) (command, error) {
 	var cmd command
-	if len(args) == 0 || (args[0] != "keygen" && args[0] != "sign") {
-		return cmd, errors.New("expected keygen or sign")
+	if len(args) == 0 || (args[0] != "keygen" && args[0] != "sign" && args[0] != "presiggen" && args[0] != "signwithpresig") {
+		return cmd, errors.New("expected keygen, sign, presiggen or signwithpresig")
 	}
 	cmd.mode = args[0]
 	flags := flag.NewFlagSet(cmd.mode, flag.ContinueOnError)
@@ -28,16 +31,28 @@ func parseCommand(args []string) (command, error) {
 	flags.StringVar(&cmd.configPath, "config", "configs/mobile/mobile.json", "embedded node JSON config")
 	flags.StringVar(&cmd.algorithm, "algorithm", "ecdsa", "ecdsa or frost")
 	flags.StringVar(&cmd.keyID, "key-id", "", "key ID; generated if omitted for keygen")
-	if cmd.mode == "keygen" {
+	switch cmd.mode {
+	case "keygen":
 		flags.IntVar(&cmd.threshold, "threshold", 2, "protocol threshold; positive and less than party count")
-	} else {
+	case "presiggen":
+		flags.IntVar(&cmd.count, "count", 1, "presignature batch size (1 to 8)")
+	case "sign", "signwithpresig":
 		flags.StringVar(&cmd.message, "message", "", "UTF-8 message to sign")
+		if cmd.mode == "signwithpresig" {
+			flags.StringVar(&cmd.presignatureID, "presignature-id", "", "explicit presignature ID from presiggen")
+		}
 	}
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
-		return cmd, errors.New("invalid command flags; use -config, -algorithm, -key-id and -threshold (keygen) or -message (sign)")
+		return cmd, errors.New("invalid command flags; use -config, -algorithm, -key-id with -threshold (keygen), -count (presiggen), or -message and -presignature-id (signwithpresig)")
 	}
-	if cmd.configPath == "" || (cmd.algorithm != "ecdsa" && cmd.algorithm != "frost") || (cmd.mode == "sign" && strings.TrimSpace(cmd.keyID) == "") || (cmd.mode == "keygen" && cmd.threshold < 1) {
-		return cmd, errors.New("expected config, ecdsa or frost, positive threshold for keygen, and key-id for sign")
+	if cmd.configPath == "" || (cmd.algorithm != "ecdsa" && cmd.algorithm != "frost") || (cmd.mode != "keygen" && strings.TrimSpace(cmd.keyID) == "") || (cmd.mode == "keygen" && cmd.threshold < 1) || (cmd.mode == "presiggen" && (cmd.count < 1 || cmd.count > 8)) {
+		return cmd, errors.New("expected config, ecdsa or frost, key-id, positive threshold for keygen and count from 1 to 8 for presiggen")
+	}
+	if cmd.mode == "signwithpresig" {
+		id, err := base64.RawURLEncoding.Strict().DecodeString(cmd.presignatureID)
+		if err != nil || len(id) != 32 {
+			return cmd, errors.New("expected an explicit valid presignature-id")
+		}
 	}
 	return cmd, nil
 }

@@ -3,10 +3,12 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +21,8 @@ import (
 	"github.com/C18519898242/mpc-node-api/internal/config"
 	"github.com/C18519898242/mpc-node-api/internal/keystore"
 	"github.com/C18519898242/mpc-node-api/internal/peertls"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	secpECDSA "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"github.com/taurusgroup/multi-party-sig/pkg/party"
 )
 
@@ -96,7 +100,7 @@ func TestEmbeddedMobileCreateReopenAndSign(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = client.Close() })
 			keyID := "mobile-" + algorithm
-			created, err := client.CreateKey(algorithm, 2, keyID)
+			created, err := client.CreateKey(algorithm, 1, keyID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -106,6 +110,19 @@ func TestEmbeddedMobileCreateReopenAndSign(t *testing.T) {
 			}
 			if json.Unmarshal([]byte(created), &key) != nil || key.KeyID != keyID || len(key.PublicKey) == 0 {
 				t.Fatal("invalid mobile key creation response")
+			}
+			for _, count := range []int{0, -1, 9} {
+				if _, err := client.GeneratePresignatures(algorithm, keyID, count); err == nil {
+					t.Fatal("invalid mobile presign count accepted")
+				}
+			}
+			batch, err := client.GeneratePresignatures(algorithm, keyID, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var presigns struct{ IDs []string }
+			if json.Unmarshal([]byte(batch), &presigns) != nil || len(presigns.IDs) != 2 || presigns.IDs[0] == presigns.IDs[1] {
+				t.Fatal("invalid mobile presign batch")
 			}
 			if err := client.Close(); err != nil {
 				t.Fatal(err)
@@ -125,6 +142,75 @@ func TestEmbeddedMobileCreateReopenAndSign(t *testing.T) {
 			}
 			if json.Unmarshal([]byte(signed), &signature) != nil || !bytes.Equal(signature.PublicKey, key.PublicKey) || len(signature.Signature) == 0 {
 				t.Fatal("mobile restart changed public key")
+			}
+			for _, id := range []string{"", "invalid-id"} {
+				if _, err := client.SignWithPresignature(algorithm, keyID, id, []byte("invalid request")); err == nil {
+					t.Fatal("mobile signing must require an explicit valid presign ID")
+				}
+			}
+			// Consumption needs only HTTPS control calls; no MPC message polling.
+			for _, peer := range []party.ID{"2", "3"} {
+				client.node.peerClients[peer].Transport = &presignOnlyTransport{base: client.node.peerClients[peer].Transport}
+			}
+			message := []byte("mobile presign restart signing")
+			presigned, err := client.SignWithPresignature(algorithm, keyID, presigns.IDs[0], message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result struct {
+				KeyID, PresignatureID string
+				PublicKey, Signature  []byte
+			}
+			if json.Unmarshal([]byte(presigned), &result) != nil || result.KeyID != keyID || result.PresignatureID != presigns.IDs[0] || !bytes.Equal(result.PublicKey, key.PublicKey) {
+				t.Fatal("invalid mobile combined presign signature")
+			}
+			verifyMobileSignature(t, algorithm, key.PublicKey, message, result.Signature)
+			if _, err := client.SignWithPresignature(algorithm, keyID, presigns.IDs[0], []byte("different message")); err == nil {
+				t.Fatal("mobile presignature was reused")
+			}
+			for _, n := range nodes {
+				appContext := context.WithValue(t.Context(), applicationContextKey{}, app)
+				count, err := n.keys.CountPresign(appContext, app, keyID)
+				if err != nil || count != 1 {
+					t.Fatal("server presign was not consumed exactly once", err)
+				}
+			}
+			for _, peer := range []party.ID{"2", "3"} {
+				client.node.peerClients[peer].Transport = client.node.peerClients[peer].Transport.(*presignOnlyTransport).base
+			}
+			// The original roster indexes survive changing the active participant set.
+			if err := client.Close(); err != nil {
+				t.Fatal(err)
+			}
+			subsetConfig := cfg
+			subsetConfig.Peers = map[party.ID]string{"3": cfg.Peers["3"]}
+			subset, err := NewEmbedded(subsetConfig, app, "mobile fixture password", map[party.ID]string{"3": credentials["3"]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = subset.Close() })
+			subsetBatch, err := subset.GeneratePresignatures(algorithm, keyID, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var selected struct{ IDs []string }
+			if json.Unmarshal([]byte(subsetBatch), &selected) != nil || len(selected.IDs) != 1 {
+				t.Fatal("invalid subset presign batch")
+			}
+			subsetSignature, err := subset.SignWithPresignature(algorithm, keyID, selected.IDs[0], message)
+			if err != nil {
+				t.Fatal("subset presign signing failed", err)
+			}
+			if json.Unmarshal([]byte(subsetSignature), &result) != nil {
+				t.Fatal("invalid subset signature response")
+			}
+			verifyMobileSignature(t, algorithm, key.PublicKey, message, result.Signature)
+			if err := subset.Close(); err != nil {
+				t.Fatal(err)
+			}
+			client, err = NewEmbedded(cfg, app, "mobile fixture password", credentials)
+			if err != nil {
+				t.Fatal(err)
 			}
 			ctx := context.WithValue(t.Context(), applicationContextKey{}, app)
 			for _, n := range nodes {
@@ -150,8 +236,11 @@ func TestEmbeddedMobileCreateReopenAndSign(t *testing.T) {
 			if err := db.QueryRow("SELECT count(*) FROM node_master_key").Scan(&count); err != nil || count != 1 {
 				t.Fatal("mobile MK was not persisted", err)
 			}
+			if err := db.QueryRow("SELECT count(*) FROM "+algorithm+"_presignatures WHERE application_id=? AND key_id=? AND share_format=1 AND presignature_id=?", app, keyID, presigns.IDs[1]).Scan(&count); err != nil || count != 1 {
+				t.Fatal("remaining mobile presignature was not encrypted and persisted", err)
+			}
 			// A device certificate does not authorize a different application's API key.
-			for _, path := range []string{"/internal/mobile/poll", "/internal/mobile/frost/keys", "/applications/foreign/internal/mpc/frost.fixture"} {
+			for _, path := range []string{"/internal/mobile/poll", "/internal/mobile/frost/keys", "/internal/mobile/" + algorithm + "/keys/" + keyID + "/1/presiggen", "/internal/mobile/" + algorithm + "/keys/" + keyID + "/signwithpresig", "/applications/foreign/internal/mpc/frost.fixture"} {
 				r, _ := http.NewRequest("POST", servers["2"].URL+path, bytes.NewReader([]byte(`{}`)))
 				r.Header.Set("Authorization", "APIKEY foreign-key")
 				response, err := client.node.peerClients["2"].Do(r)
@@ -177,7 +266,10 @@ func TestEmbeddedMobileCreateReopenAndSign(t *testing.T) {
 			blocked := &blockedMobileSignTransport{base: client.node.peerClients["3"].Transport, arrived: make(chan struct{})}
 			client.node.peerClients["3"].Transport = blocked
 			signDone := make(chan error, 1)
-			go func() { _, err := client.Sign(algorithm, keyID, []byte("interrupted signing")); signDone <- err }()
+			go func() {
+				_, err := client.SignWithPresignature(algorithm, keyID, presigns.IDs[1], []byte("interrupted signing"))
+				signDone <- err
+			}()
 			select {
 			case <-blocked.arrived:
 			case <-time.After(5 * time.Second):
@@ -199,6 +291,12 @@ func TestEmbeddedMobileCreateReopenAndSign(t *testing.T) {
 			if _, err := client.Sign(algorithm, keyID, []byte("after close")); err == nil {
 				t.Fatal("closed embedded client signed")
 			}
+			if _, err := client.GeneratePresignatures(algorithm, keyID, 1); err == nil {
+				t.Fatal("closed embedded client generated presignatures")
+			}
+			if _, err := client.SignWithPresignature(algorithm, keyID, presigns.IDs[1], nil); err == nil {
+				t.Fatal("closed embedded client consumed a presignature")
+			}
 		})
 	}
 }
@@ -209,8 +307,36 @@ type blockedMobileSignTransport struct {
 	once    sync.Once
 }
 
+func verifyMobileSignature(t *testing.T, algorithm string, public, message, signature []byte) {
+	t.Helper()
+	if algorithm == "frost" {
+		if !ed25519.Verify(public, message, signature) {
+			t.Fatal("invalid combined mobile Ed25519 signature")
+		}
+		return
+	}
+	point, err := secp256k1.ParsePubKey(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := secpECDSA.ParseDERSignature(signature)
+	digest := sha256.Sum256(message)
+	if err != nil || !sig.Verify(digest[:], point) {
+		t.Fatal("invalid combined mobile ECDSA signature")
+	}
+}
+
+type presignOnlyTransport struct{ base http.RoundTripper }
+
+func (p *presignOnlyTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if !strings.HasSuffix(r.URL.Path, "/signwithpresig") || r.Header.Get("MPC-SessionID") != "" {
+		return nil, fmt.Errorf("presign consumption unexpectedly used MPC traffic: %s", r.URL.Path)
+	}
+	return p.base.RoundTrip(r)
+}
+
 func (b *blockedMobileSignTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if strings.HasSuffix(r.URL.Path, "/sign") {
+	if strings.HasSuffix(r.URL.Path, "/sign") || strings.HasSuffix(r.URL.Path, "/signwithpresig") {
 		b.once.Do(func() { close(b.arrived) })
 		<-r.Context().Done()
 		return nil, r.Context().Err()
