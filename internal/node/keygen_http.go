@@ -124,7 +124,7 @@ func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Ke
 		return session, nil
 	}
 	n.sessions[sessionKey{applicationID(ctx), id}] = session
-	go n.runStoredKeygen(context.WithoutCancel(ctx), id, session, generate)
+	go n.runStoredKeygen(n.operationContext(ctx), id, session, generate)
 	return session, nil
 }
 

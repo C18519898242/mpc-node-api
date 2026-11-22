@@ -36,27 +36,42 @@ type shareStore interface {
 }
 
 type node struct {
-	config        config.Config
-	logger        *slog.Logger
-	client        *http.Client
-	peerClients   map[party.ID]*http.Client
-	peerNames     map[string]party.ID
-	applications  map[string]struct{}
-	credentials   []apiKeyCredential
-	mu            sync.Mutex
-	sessions      map[sessionKey]*keygenSession
-	keyOperations map[keyOperation]int
-	keys          shareStore
-	shareCipher   *keystore.ShareCipher
-	wrappingKey   *rsa.PrivateKey
+	config          config.Config
+	logger          *slog.Logger
+	client          *http.Client
+	peerClients     map[party.ID]*http.Client
+	peerNames       map[string]party.ID
+	applications    map[string]struct{}
+	credentials     []apiKeyCredential
+	mu              sync.Mutex
+	sessions        map[sessionKey]*keygenSession
+	keyOperations   map[keyOperation]int
+	keys            shareStore
+	shareCipher     *keystore.ShareCipher
+	wrappingKey     *rsa.PrivateKey
+	mobileMailboxes map[mobileMailboxKey]*mobileMailbox
+	embedded        bool
+	workerContext   context.Context
 }
 
 func newNode(cfg config.Config) *node {
 	return &node{
-		config:        cfg,
-		logger:        slog.Default(),
-		client:        &http.Client{Timeout: 2 * time.Second},
-		sessions:      make(map[sessionKey]*keygenSession),
-		keyOperations: make(map[keyOperation]int),
+		config:          cfg,
+		logger:          slog.Default(),
+		client:          &http.Client{Timeout: 2 * time.Second},
+		sessions:        make(map[sessionKey]*keygenSession),
+		keyOperations:   make(map[keyOperation]int),
+		mobileMailboxes: make(map[mobileMailboxKey]*mobileMailbox),
 	}
+}
+
+func (n *node) operationContext(ctx context.Context) context.Context {
+	if n.workerContext == nil {
+		return context.WithoutCancel(ctx)
+	}
+	return context.WithValue(n.workerContext, applicationContextKey{}, applicationID(ctx))
+}
+
+func (n *node) knownPeer(id party.ID) bool {
+	return n.config.Peers[id] != "" || n.config.MobilePeers[id] != ""
 }

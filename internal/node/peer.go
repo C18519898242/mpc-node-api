@@ -22,6 +22,7 @@ func (n *node) peerHandler() http.Handler {
 	n.registerPeerRoute(mux, "/internal/mpc/{sessionId}", n.receiveMessage)
 	n.registerPeerRoute(mux, "/internal/reshare/{sessionId}/ready", n.reshareReady)
 	n.registerPeerRoute(mux, "/internal/keycopy/{sessionId}/ready", n.keyCopyReady)
+	n.registerMobileRoutes(mux)
 	if n.config.MPCTLS == nil {
 		return mux
 	}
@@ -45,16 +46,19 @@ func (n *node) registerPeerRoute(mux *http.ServeMux, path string, handler http.H
 			http.NotFound(w, r)
 			return
 		}
+		if app := n.config.MobilePeers[n.verifiedPeer(r)]; app != "" && app != id {
+			http.NotFound(w, r)
+			return
+		}
 		handler(w, withApplication(r, id))
 	})
 }
 
 func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("sessionId")
-	batchID, slot, presign := splitPresignRoute(id)
 	var message protocol.Message
 	if !validPeerSessionID(id) || decodeJSON(w, r, &message, 1<<20) != nil ||
-		n.config.Peers[message.From] == "" || !message.IsFor(n.config.PartyID) {
+		!n.knownPeer(message.From) || !message.IsFor(n.config.PartyID) {
 		http.Error(w, "invalid MPC message", http.StatusBadRequest)
 		return
 	}
@@ -62,6 +66,11 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "MPC sender does not match certificate identity", http.StatusForbidden)
 		return
 	}
+	n.acceptMessage(w, r, id, &message)
+}
+
+func (n *node) acceptMessage(w http.ResponseWriter, r *http.Request, id string, message *protocol.Message) {
+	batchID, slot, presign := splitPresignRoute(id)
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -94,7 +103,7 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 			incoming = session.presignInboxes[slot]
 		}
 		select {
-		case incoming <- &message:
+		case incoming <- message:
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.Error(w, "MPC inbox is full", http.StatusServiceUnavailable)
@@ -149,8 +158,8 @@ func (n *node) sendMessage(ctx context.Context, id string, message *protocol.Mes
 	if err != nil {
 		return err
 	}
-	for peer := range n.config.Peers {
-		if !message.IsFor(peer) || (participants != nil && !participants.Contains(peer)) {
+	for _, peer := range n.configuredPlayers() {
+		if peer == n.config.PartyID || !message.IsFor(peer) || (participants != nil && !participants.Contains(peer)) {
 			continue
 		}
 		if err := n.deliverMessage(ctx, peer, "/internal/mpc/"+id, body); err != nil {
@@ -161,6 +170,9 @@ func (n *node) sendMessage(ctx context.Context, id string, message *protocol.Mes
 }
 
 func (n *node) deliverMessage(ctx context.Context, peer party.ID, path string, body []byte) error {
+	if app := n.config.MobilePeers[peer]; app != "" {
+		return n.enqueueMobile(ctx, peer, path, body)
+	}
 	client, scheme := n.client, "http"
 	if n.config.MPCTLS != nil {
 		client, scheme = n.peerClients[peer], "https"
@@ -168,7 +180,7 @@ func (n *node) deliverMessage(ctx context.Context, peer party.ID, path string, b
 			return errors.New("MPC peer has no TLS configuration")
 		}
 	}
-	if n.config.RESTAuth != nil {
+	if n.config.RESTAuth != nil || n.embedded {
 		path = peerApplicationPath + applicationID(ctx) + path
 	}
 	endpoint := url.URL{Scheme: scheme, Host: n.config.Peers[peer], Path: path}

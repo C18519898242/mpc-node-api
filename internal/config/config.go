@@ -16,6 +16,7 @@ type Config struct {
 	MPCAddr                    string                   `json:"mpcAddr"`
 	DataDir                    string                   `json:"dataDir"`
 	Peers                      map[party.ID]string      `json:"peers"`
+	MobilePeers                map[party.ID]string      `json:"mobilePeers,omitempty"`
 	LegacyFROSTPlayers         []party.ID               `json:"legacyFrostPlayers,omitempty"`
 	MPCTLS                     *MPCTLSConfig            `json:"mpcTLS,omitempty"`
 	RESTAuth                   *RESTAuthConfig          `json:"restAuth,omitempty"`
@@ -52,6 +53,13 @@ type MPCTLSConfig struct {
 
 // Load reads and validates a local node configuration.
 func Load(path string) (Config, error) {
+	return load(path, false)
+}
+
+// LoadEmbedded resolves an outbound-only node's files without listener addresses.
+func LoadEmbedded(path string) (Config, error) { return load(path, true) }
+
+func load(path string, embedded bool) (Config, error) {
 	var cfg Config
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -60,11 +68,17 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("decode %s: %w", path, err)
 	}
-	if !validPartyID(cfg.PartyID) || cfg.DataDir == "" || len(cfg.Peers) == 0 {
+	if !validPartyID(cfg.PartyID) || cfg.DataDir == "" || len(cfg.Peers)+len(cfg.MobilePeers) == 0 {
 		return cfg, fmt.Errorf("%s: expected partyId, dataDir and at least one peer", path)
 	}
 
-	addrs := []string{cfg.RESTAddr, cfg.MPCAddr}
+	addrs := []string{}
+	if !embedded {
+		addrs = append(addrs, cfg.RESTAddr, cfg.MPCAddr)
+	}
+	if err := validateMobilePeers(cfg); err != nil {
+		return cfg, err
+	}
 	for id, addr := range cfg.Peers {
 		if !validPartyID(id) || id == cfg.PartyID {
 			return cfg, fmt.Errorf("%s: invalid peer ID %q", path, id)
@@ -86,10 +100,10 @@ func Load(path string) (Config, error) {
 	seen := make(map[netip.AddrPort]bool, len(addrs))
 	for i, raw := range addrs {
 		addr, err := netip.ParseAddrPort(raw)
-		if err != nil || addr.Port() == 0 || seen[addr] || (i >= 2 && addr.Addr().IsUnspecified()) {
+		if err != nil || addr.Port() == 0 || seen[addr] || ((embedded || i >= 2) && addr.Addr().IsUnspecified()) {
 			return cfg, fmt.Errorf("%s: invalid or duplicate address %q", path, raw)
 		}
-		if (i == 0 || cfg.MPCTLS == nil) && !addr.Addr().IsLoopback() {
+		if ((!embedded && i == 0) || cfg.MPCTLS == nil) && !addr.Addr().IsLoopback() {
 			return cfg, fmt.Errorf("%s: plaintext listeners and peers must use loopback addresses, got %q", path, raw)
 		}
 		seen[addr] = true
@@ -112,6 +126,38 @@ func Load(path string) (Config, error) {
 		cfg.KeyTransfer.WrappingPrivateKeyFile = filepath.Join(filepath.Dir(path), cfg.KeyTransfer.WrappingPrivateKeyFile)
 	}
 	return cfg, os.MkdirAll(cfg.DataDir, 0700)
+}
+
+// ValidateEmbedded checks JSON supplied directly by an embedding application.
+func ValidateEmbedded(cfg Config) error {
+	if !validPartyID(cfg.PartyID) || cfg.DataDir == "" || len(cfg.Peers) < 1 || len(cfg.MobilePeers) > 0 || cfg.MPCTLS == nil || cfg.RESTAddr != "" || cfg.MPCAddr != "" || cfg.RESTAuth != nil {
+		return fmt.Errorf("embedded node requires TLS, outbound peers, dataDir and no listeners or REST auth")
+	}
+	seen := map[netip.AddrPort]bool{}
+	for id, raw := range cfg.Peers {
+		addr, err := netip.ParseAddrPort(raw)
+		if !validPartyID(id) || id == cfg.PartyID || err != nil || addr.Port() == 0 || addr.Addr().IsUnspecified() || seen[addr] {
+			return fmt.Errorf("invalid embedded peer")
+		}
+		seen[addr] = true
+	}
+	return nil
+}
+
+func validateMobilePeers(cfg Config) error {
+	for id, app := range cfg.MobilePeers {
+		if !validPartyID(id) || id == cfg.PartyID || cfg.Peers[id] != "" || cfg.MPCTLS == nil || cfg.RESTAuth == nil || app == "" {
+			return fmt.Errorf("mobilePeers requires distinct peer IDs, mTLS and application authentication")
+		}
+		found := false
+		for _, key := range cfg.RESTAuth.APIKeys {
+			found = found || key.ApplicationID == app
+		}
+		if !found {
+			return fmt.Errorf("mobile peer application is not configured")
+		}
+	}
+	return nil
 }
 
 func validPartyID(id party.ID) bool {

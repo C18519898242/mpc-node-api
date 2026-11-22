@@ -19,7 +19,10 @@ func (n *node) configurePeerTLS() (*tls.Config, error) {
 	}
 	n.peerClients = make(map[party.ID]*http.Client, len(n.config.Peers))
 	n.peerNames = make(map[string]party.ID, len(n.config.Peers))
-	for peer := range n.config.Peers {
+	for _, peer := range n.configuredPlayers() {
+		if peer == n.config.PartyID {
+			continue
+		}
 		n.peerNames[peertls.Name(peer)] = peer
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.Proxy = nil

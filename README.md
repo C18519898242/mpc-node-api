@@ -2,6 +2,8 @@
 
 单个 MPC 节点的 Go HTTP 服务，支持 CMP（secp256k1 ECDSA）和 FROST-Ed25519 建钥及签名。仓库提供三节点联调配置。
 
+手机节点的本地模拟（一个出站连接的嵌入式节点 + 两个服务端）：[运行、存储位置与 Android 接入边界](docs/mobile-nodes.md)。
+
 ## 代码结构
 
 - `main.go` 解析启动参数并选择运行模式。

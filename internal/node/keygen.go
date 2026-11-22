@@ -108,6 +108,9 @@ func (n *node) configuredPlayers() party.IDSlice {
 	for peer := range n.config.Peers {
 		parties = append(parties, peer)
 	}
+	for peer := range n.config.MobilePeers {
+		parties = append(parties, peer)
+	}
 	return party.NewIDSlice(parties)
 }
 

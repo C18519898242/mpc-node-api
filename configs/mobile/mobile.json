@@ -1,0 +1,19 @@
+{
+  "partyId": "1",
+  "dataDir": "../../data/mobile-sim",
+  "peers": {
+    "2": "127.0.0.1:9182",
+    "3": "127.0.0.1:9183"
+  },
+  "mpcTLS": {
+    "caFile": "../../certs/mpc-dev/ca.crt",
+    "certFile": "../../certs/mpc-dev/node-1/node.crt",
+    "keyFile": "../../certs/mpc-dev/node-1/node.key"
+  },
+  "applicationID": "mobile-demo",
+  "serverAPIKeyEnvs": {
+    "2": "MPC_NODE_API_KEY_2",
+    "3": "MPC_NODE_API_KEY_3"
+  },
+  "encryptorMasterPasswordEnv": "MPC_MOBILE_MASTER_PASSWORD"
+}

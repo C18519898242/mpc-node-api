@@ -1,0 +1,17 @@
+{
+  "partyId": "3",
+  "restAddr": "127.0.0.1:8183",
+  "mpcAddr": "127.0.0.1:9183",
+  "dataDir": "../../data/mobile-demo/node-3",
+  "peers": {"2": "127.0.0.1:9182"},
+  "mobilePeers": {"1": "mobile-demo"},
+  "mpcTLS": {
+    "caFile": "../../certs/mpc-dev/ca.crt",
+    "certFile": "../../certs/mpc-dev/node-3/node.crt",
+    "keyFile": "../../certs/mpc-dev/node-3/node.key"
+  },
+  "restAuth": {
+    "apiKeys": [{"applicationID": "mobile-demo", "sha256": "Leocc1uR9Z7ersC5jrv6zbAWg3u+jgZPXlpeDkg+VdU="}]
+  },
+  "encryptorMasterPasswordEnv": "MPC_NODE_3_MASTER_PASSWORD"
+}

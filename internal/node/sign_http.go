@@ -22,7 +22,7 @@ func (n *node) signingPlayers(w http.ResponseWriter, r *http.Request, sessionID 
 	signers := make(party.IDSlice, 0, len(n.config.Peers)+1)
 	for _, player := range r.Header.Values("MPC-Players") {
 		id := party.ID(player)
-		_, peer := n.config.Peers[id]
+		peer := n.knownPeer(id)
 		if (id != n.config.PartyID && !peer) || slices.Contains(signers, id) {
 			http.Error(w, "invalid signing players", http.StatusBadRequest)
 			return nil
@@ -90,7 +90,7 @@ func (n *node) beginSign(ctx context.Context, id string, binding [32]byte, run s
 		signBinding: binding,
 	}
 	n.sessions[sessionKey{applicationID(ctx), id}] = session
-	go n.runSign(context.WithoutCancel(ctx), id, session, run)
+	go n.runSign(n.operationContext(ctx), id, session, run)
 	return session
 }
 
