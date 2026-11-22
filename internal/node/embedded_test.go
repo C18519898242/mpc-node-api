@@ -143,6 +143,38 @@ func TestEmbeddedMobileCreateReopenAndSign(t *testing.T) {
 			if json.Unmarshal([]byte(signed), &signature) != nil || !bytes.Equal(signature.PublicKey, key.PublicKey) || len(signature.Signature) == 0 {
 				t.Fatal("mobile restart changed public key")
 			}
+			path := []uint32{0, 1}
+			childMessage := []byte("mobile derived online signing")
+			childJSON, err := client.SignWithPath(algorithm, keyID, childMessage, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var child struct{ PublicKey, Signature []byte }
+			if json.Unmarshal([]byte(childJSON), &child) != nil || bytes.Equal(child.PublicKey, key.PublicKey) {
+				t.Fatal("mobile derived signing returned the root public key")
+			}
+			verifyMobileSignature(t, algorithm, child.PublicKey, childMessage, child.Signature)
+			appCtx := context.WithValue(t.Context(), applicationContextKey{}, app)
+			var expectedChild []byte
+			if algorithm == "ecdsa" {
+				expectedChild, err = nodes["2"].loadECDSAPublicKey(appCtx, keyID, path)
+			} else {
+				expectedChild, err = nodes["2"].loadFROSTPublicKey(appCtx, keyID, path)
+			}
+			if err != nil || !bytes.Equal(child.PublicKey, expectedChild) {
+				t.Fatal("mobile and backend derived public keys differ", err)
+			}
+			if _, err := client.SignWithPath(algorithm, keyID, childMessage, []uint32{1 << 31}); err == nil {
+				t.Fatal("mobile online signing accepted a hardened path")
+			}
+			if _, err := client.SignWithPresignatureAndPath(algorithm, keyID, presigns.IDs[0], childMessage, []uint32{1 << 31}); err == nil {
+				t.Fatal("mobile presign signing accepted a hardened path")
+			}
+			for _, n := range nodes {
+				if count, err := n.keys.CountPresign(appCtx, app, keyID); err != nil || count != 2 {
+					t.Fatal("invalid derivation path consumed server presignatures", err)
+				}
+			}
 			for _, id := range []string{"", "invalid-id"} {
 				if _, err := client.SignWithPresignature(algorithm, keyID, id, []byte("invalid request")); err == nil {
 					t.Fatal("mobile signing must require an explicit valid presign ID")
@@ -153,7 +185,7 @@ func TestEmbeddedMobileCreateReopenAndSign(t *testing.T) {
 				client.node.peerClients[peer].Transport = &presignOnlyTransport{base: client.node.peerClients[peer].Transport}
 			}
 			message := []byte("mobile presign restart signing")
-			presigned, err := client.SignWithPresignature(algorithm, keyID, presigns.IDs[0], message)
+			presigned, err := client.SignWithPresignatureAndPath(algorithm, keyID, presigns.IDs[0], message, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -161,10 +193,10 @@ func TestEmbeddedMobileCreateReopenAndSign(t *testing.T) {
 				KeyID, PresignatureID string
 				PublicKey, Signature  []byte
 			}
-			if json.Unmarshal([]byte(presigned), &result) != nil || result.KeyID != keyID || result.PresignatureID != presigns.IDs[0] || !bytes.Equal(result.PublicKey, key.PublicKey) {
+			if json.Unmarshal([]byte(presigned), &result) != nil || result.KeyID != keyID || result.PresignatureID != presigns.IDs[0] || !bytes.Equal(result.PublicKey, child.PublicKey) {
 				t.Fatal("invalid mobile combined presign signature")
 			}
-			verifyMobileSignature(t, algorithm, key.PublicKey, message, result.Signature)
+			verifyMobileSignature(t, algorithm, child.PublicKey, message, result.Signature)
 			if _, err := client.SignWithPresignature(algorithm, keyID, presigns.IDs[0], []byte("different message")); err == nil {
 				t.Fatal("mobile presignature was reused")
 			}
@@ -235,6 +267,9 @@ func TestEmbeddedMobileCreateReopenAndSign(t *testing.T) {
 			}
 			if err := db.QueryRow("SELECT count(*) FROM node_master_key").Scan(&count); err != nil || count != 1 {
 				t.Fatal("mobile MK was not persisted", err)
+			}
+			if err := db.QueryRow("SELECT count(*) FROM key_shares WHERE application_id=? AND key_id=?", app, keyID).Scan(&count); err != nil || count != 1 {
+				t.Fatal("derived signing persisted an extra key share", err)
 			}
 			if err := db.QueryRow("SELECT count(*) FROM "+algorithm+"_presignatures WHERE application_id=? AND key_id=? AND share_format=1 AND presignature_id=?", app, keyID, presigns.IDs[1]).Scan(&count); err != nil || count != 1 {
 				t.Fatal("remaining mobile presignature was not encrypted and persisted", err)

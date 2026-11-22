@@ -134,7 +134,7 @@ func (e *Embedded) CreateKey(algorithm string, threshold int, keyID string) (str
 	if json.Unmarshal(response, &created) != nil || !keyIDPattern.MatchString(created.KeyID) {
 		return "", errors.New("invalid mobile key response")
 	}
-	public, err := e.publicKey(algorithm, created.KeyID)
+	public, err := e.publicKey(algorithm, created.KeyID, nil)
 	if err != nil {
 		return "", err
 	}
@@ -143,8 +143,12 @@ func (e *Embedded) CreateKey(algorithm string, threshold int, keyID string) (str
 }
 
 // Sign signs the original message. ECDSA uses SHA256(message); FROST signs the
-// original bytes. This minimal API signs the root key only.
+// original bytes. An omitted path signs the root key.
 func (e *Embedded) Sign(algorithm, keyID string, message []byte) (string, error) {
+	return e.SignWithPath(algorithm, keyID, message, nil)
+}
+
+func (e *Embedded) SignWithPath(algorithm, keyID string, message []byte, chainPath []uint32) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	curve, err := mobileCurve(algorithm)
@@ -157,14 +161,14 @@ func (e *Embedded) Sign(algorithm, keyID string, message []byte) (string, error)
 	if !keyIDPattern.MatchString(keyID) || len(message) > 2048 {
 		return "", errors.New("invalid mobile signing parameters")
 	}
-	public, err := e.publicKey(algorithm, keyID)
+	public, err := e.publicKey(algorithm, keyID, chainPath)
 	if err != nil {
 		return "", err
 	}
-	body, _ := json.Marshal(map[string]any{"message": append([]byte{}, message...)})
+	body, _ := json.Marshal(map[string]any{"message": append([]byte{}, message...), "chainPath": chainPath})
 	digest := sha256.Sum256(message)
 	if algorithm == "ecdsa" {
-		body, _ = json.Marshal(ecdsaSignRequest{MessageHash: digest[:]})
+		body, _ = json.Marshal(ecdsaSignRequest{MessageHash: digest[:], ChainPath: chainPath})
 	}
 	sid := newMobileSession()
 	response, err := e.coordinate("/"+algorithm+"/keys/"+keyID+"/sign", algorithm+"-sign."+sid, sid, body)
@@ -193,8 +197,11 @@ func (e *Embedded) Sign(algorithm, keyID string, message []byte) (string, error)
 	return string(result), nil
 }
 
-func (e *Embedded) publicKey(algorithm, keyID string) ([]byte, error) {
-	data, err := e.localCall(e.ctx, "/"+algorithm+"/keys/"+keyID+"/publickey", "", []byte(`{}`))
+func (e *Embedded) publicKey(algorithm, keyID string, chainPath []uint32) ([]byte, error) {
+	body, _ := json.Marshal(struct {
+		ChainPath []uint32 `json:"chainPath"`
+	}{chainPath})
+	data, err := e.localCall(e.ctx, "/"+algorithm+"/keys/"+keyID+"/publickey", "", body)
 	if err != nil {
 		return nil, err
 	}

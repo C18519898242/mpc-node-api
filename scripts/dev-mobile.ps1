@@ -96,24 +96,31 @@ try {
             if ([Convert]::FromBase64String($signed.signature).Length -eq 0) { throw "$algorithm returned an empty signature." }
             Write-Host "$algorithm create/reopen/sign passed; public keys match and the mobile client verified the signature."
 
+            $childJSON = @(& $mobileBinary sign -config configs/mobile/mobile.json -algorithm $algorithm -key-id $keyID -chain-path '[0,1]' -message 'mobile derived restart smoke')
+            if ($LASTEXITCODE -ne 0) { throw "$algorithm derived online signing failed." }
+            $child = ($childJSON -join "`n") | ConvertFrom-Json
+            if ($child.keyID -cne $keyID -or !$child.publicKey -or $child.publicKey -ceq $created.publicKey -or !$child.signature) {
+                throw "$algorithm did not return a verified derived signature."
+            }
+
             $batchJSON = @(& $mobileBinary presiggen -config configs/mobile/mobile.json -algorithm $algorithm -key-id $keyID -count 2)
             if ($LASTEXITCODE -ne 0) { throw "$algorithm presiggen failed." }
             $batch = ($batchJSON -join "`n") | ConvertFrom-Json
             if (@($batch.ids).Count -ne 2 -or !$batch.ids[0] -or $batch.ids[0] -ceq $batch.ids[1]) { throw "$algorithm returned invalid presignature IDs." }
-            $presignedJSON = @(& $mobileBinary signwithpresig -config configs/mobile/mobile.json -algorithm $algorithm -key-id $keyID -presignature-id $batch.ids[0] -message 'mobile presign restart smoke')
+            $presignedJSON = @(& $mobileBinary signwithpresig -config configs/mobile/mobile.json -algorithm $algorithm -key-id $keyID -presignature-id $batch.ids[0] -chain-path '[0,1]' -message 'mobile presign restart smoke')
             if ($LASTEXITCODE -ne 0) { throw "$algorithm presign signing after reopen failed." }
             $presigned = ($presignedJSON -join "`n") | ConvertFrom-Json
-            if ($presigned.keyID -cne $keyID -or $presigned.presignatureId -cne $batch.ids[0] -or $presigned.publicKey -cne $created.publicKey -or $presigned.curve -cne $created.curve -or !$presigned.signature) {
+            if ($presigned.keyID -cne $keyID -or $presigned.presignatureId -cne $batch.ids[0] -or $presigned.publicKey -cne $child.publicKey -or $presigned.curve -cne $created.curve -or !$presigned.signature) {
                 throw "$algorithm returned invalid combined presignature results."
             }
-            $reused = Start-Process -FilePath $mobileBinary -ArgumentList @('signwithpresig', '-config', 'configs/mobile/mobile.json', '-algorithm', $algorithm, '-key-id', $keyID, '-presignature-id', $batch.ids[0], '-message', 'reused') -WorkingDirectory $repo -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput (Join-Path $logDir "$algorithm-reused.stdout.log") -RedirectStandardError (Join-Path $logDir "$algorithm-reused.stderr.log")
+            $reused = Start-Process -FilePath $mobileBinary -ArgumentList @('signwithpresig', '-config', 'configs/mobile/mobile.json', '-algorithm', $algorithm, '-key-id', $keyID, '-presignature-id', $batch.ids[0], '-chain-path', '[0,1]', '-message', 'reused') -WorkingDirectory $repo -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput (Join-Path $logDir "$algorithm-reused.stdout.log") -RedirectStandardError (Join-Path $logDir "$algorithm-reused.stderr.log")
             if ($reused.ExitCode -eq 0) { throw "$algorithm accepted an already consumed presignature." }
             foreach ($id in @(2, 3)) {
                 $headers = @{ Authorization = 'APIKEY ' + $devKeys."$id".'wallet-a' }
                 $remaining = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:818$id/key/$keyID/count/presigs" -Headers $headers -ContentType 'application/json' -Body '{}'
                 if ($remaining -ne 1) { throw "$algorithm server $id has an unexpected presignature count." }
             }
-            Write-Host "$algorithm presiggen/reopen/signwithpresig/reuse-rejected passed; keyID=$keyID; remaining presignatureId=$($batch.ids[1])."
+            Write-Host "$algorithm derived sign/presiggen/reopen/signwithpresig/reuse-rejected passed; chainPath=[0,1]; keyID=$keyID; remaining presignatureId=$($batch.ids[1])."
         }
         foreach ($db in @('data/mobile-sim/node.sqlite', 'data/mobile-demo/node-2/node.sqlite', 'data/mobile-demo/node-3/node.sqlite')) {
             if (!(Test-Path -LiteralPath $db) -or (Get-Item -LiteralPath $db).Length -eq 0) { throw 'Expected nonempty phone and server SQLite databases.' }

@@ -61,6 +61,10 @@ func (e *Embedded) GeneratePresignatures(algorithm, keyID string, count int) (st
 // SignWithPresignature consumes one explicitly selected ID on every node.
 // A failed attempt must not be retried with that ID: some shares may be consumed.
 func (e *Embedded) SignWithPresignature(algorithm, keyID, id string, message []byte) (string, error) {
+	return e.SignWithPresignatureAndPath(algorithm, keyID, id, message, nil)
+}
+
+func (e *Embedded) SignWithPresignatureAndPath(algorithm, keyID, id string, message []byte, chainPath []uint32) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	curveName, err := mobileCurve(algorithm)
@@ -73,7 +77,7 @@ func (e *Embedded) SignWithPresignature(algorithm, keyID, id string, message []b
 	if !keyIDPattern.MatchString(keyID) || id == "" || !validPresignatureID(id) || len(message) > 2048 {
 		return "", errors.New("invalid mobile presign signing parameters")
 	}
-	public, err := e.publicKey(algorithm, keyID)
+	public, err := e.publicKey(algorithm, keyID, chainPath)
 	if err != nil {
 		return "", err
 	}
@@ -82,7 +86,7 @@ func (e *Embedded) SignWithPresignature(algorithm, keyID, id string, message []b
 	if err != nil {
 		return "", err
 	}
-	request := map[string]any{"presignatureId": id, "message": append([]byte{}, message...)}
+	request := map[string]any{"presignatureId": id, "message": append([]byte{}, message...), "chainPath": chainPath}
 	if algorithm == "ecdsa" {
 		digest := sha256.Sum256(message)
 		delete(request, "message")

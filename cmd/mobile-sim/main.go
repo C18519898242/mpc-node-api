@@ -35,11 +35,11 @@ func run(args []string, out io.Writer) error {
 	case "keygen":
 		result, err = client.CreateKey(cmd.algorithm, cmd.threshold, cmd.keyID)
 	case "sign":
-		result, err = client.Sign(cmd.algorithm, cmd.keyID, []byte(cmd.message))
+		result, err = client.SignWithPath(cmd.algorithm, cmd.keyID, []byte(cmd.message), cmd.chainPath)
 	case "presiggen":
 		result, err = client.GeneratePresignatures(cmd.algorithm, cmd.keyID, cmd.count)
 	case "signwithpresig":
-		result, err = client.SignWithPresignature(cmd.algorithm, cmd.keyID, cmd.presignatureID, []byte(cmd.message))
+		result, err = client.SignWithPresignatureAndPath(cmd.algorithm, cmd.keyID, cmd.presignatureID, []byte(cmd.message), cmd.chainPath)
 	}
 	if err != nil {
 		if cmd.mode == "signwithpresig" {

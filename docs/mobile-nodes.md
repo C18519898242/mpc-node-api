@@ -12,7 +12,7 @@
 .\scripts\dev-mobile.ps1 -Smoke
 ```
 
-脚本只启动节点 2、3，分别为 ECDSA 和 FROST 建钥，再用另一个 CLI 进程重新打开手机数据库并签名。随后各生成两份预签名，用独立 CLI 进程消费其中一份，检查公钥一致、重复消费失败及服务端剩余数量。嵌入式客户端在返回完整签名之前完成合并和验签。每种算法保留一份未消费的预签名供查看数据库。结束时脚本仅停止自己启动的两个服务端进程，保留数据供再次使用。二进制和日志位于 Git 忽略的 `data/mobile-demo/bin`、`data/mobile-demo/logs`。
+脚本只启动节点 2、3，分别为 ECDSA 和 FROST 建钥，再用独立 CLI 进程重新打开手机数据库，执行根密钥签名和 `[0,1]` 路径的子密钥签名。随后各生成两份预签名，用独立 CLI 进程在 `[0,1]` 路径消费其中一份，检查子公钥一致、重复消费失败及服务端剩余数量。嵌入式客户端在返回完整签名之前完成合并和验签。每种算法保留一份未消费的预签名供查看数据库。结束时脚本仅停止自己启动的两个服务端进程，保留数据供再次使用。二进制和日志位于 Git 忽略的 `data/mobile-demo/bin`、`data/mobile-demo/logs`。
 
 只启动服务端并保持运行：
 
@@ -55,9 +55,22 @@ go run ./cmd/mobile-sim signwithpresig -config configs/mobile/mobile.json -algor
 
 `signwithpresig` 必须明确指定一个未消费的 ID，不会自动选取或重试。手机先消费本地记录，再通过 HTTPS 并行向服务端请求同一个 ID 的部分签名；此阶段不启动 MPC 会话或轮询，服务端之间也无需为这次签名交换消息。手机校验参与方、ID、公钥和承诺，合并后验签，成功返回与 `sign` 相同的完整签名 JSON，另含 `presignatureId`。ECDSA 返回 DER 签名，FROST 返回标准 64 字节 Ed25519 签名。
 
-预签名生成和消费应使用相同的参与方集合；门限允许时可为缩减后的集合重新生成一批，合并仍按密钥原始参与方编号校验。当前手机接口与原有 `Sign` 一样只签根密钥，不接收派生路径。
+预签名生成和消费应使用相同的参与方集合；门限允许时可为缩减后的集合重新生成一批，合并仍按密钥原始参与方编号校验。预签名针对根密钥预计算，消费时可指定派生路径；同一个 ID 无论用于哪个路径都只能消费一次。
 
 手机可在预计算后关闭，下次使用原密码重新打开数据库再消费。每个 ID 只能使用一次；一部分节点已消费后发生断网、超时或合并失败，应弃用该 ID，换新的 ID，不恢复已消费记录，也不自动重试。恢复旧数据库备份仍需清空预签名，防止重复使用。
+
+## 派生路径
+
+`sign` 和 `signwithpresig` 都支持可选的 `-chain-path`，格式与 REST 请求中的 `chainPath` 一致，为 JSON 数组：
+
+```powershell
+go run ./cmd/mobile-sim sign -config configs/mobile/mobile.json -algorithm frost -key-id phone-frost-1 -chain-path '[0,1]' -message hello
+go run ./cmd/mobile-sim signwithpresig -config configs/mobile/mobile.json -algorithm frost -key-id phone-frost-1 -presignature-id '<未消费的 ID>' -chain-path '[0,1]' -message hello
+```
+
+ECDSA 同样使用这个参数。省略参数、`[]` 或 `null` 表示根密钥；各索引必须是 `0` 到 `2147483647` 的整数，两种算法均只支持非硬化派生，沿用服务端原有派生规则。非法 JSON、负数、空元素和硬化索引会在签名及预签名消费前被拒绝。
+
+手机先按同一路径获取本地子公钥，再把路径传给所有参与节点，使用该子公钥验证最终签名。响应中的 `keyID` 仍是根密钥 ID，`publicKey` 是实际用于签名的子公钥。SQLite 继续只保存根密钥分片，不增加子密钥记录，也不覆盖根分片。
 
 ## 配置和实际存储位置
 
@@ -88,6 +101,9 @@ signedJSON, err := client.Sign("frost", "phone-key-1", []byte("hello"))
 batchJSON, err := client.GeneratePresignatures("frost", "phone-key-1", 2)
 // 从 batchJSON 的 ids 中选取一个未消费的 ID。
 presignedJSON, err := client.SignWithPresignature("frost", "phone-key-1", presignatureID, []byte("hello"))
+// 带路径的方法用 JSON 字符串传路径，以便未来 gomobile 绑定。
+childSignedJSON, err := client.SignWithPath("frost", "phone-key-1", []byte("hello"), "[0,1]")
+childPresignedJSON, err := client.SignWithPresignatureAndPath("frost", "phone-key-1", anotherUnusedPresignatureID, []byte("hello"), "[0,1]")
 ```
 
 Android 应用未来可传入 `getFilesDir()/mpc`，使数据库位于应用私有目录下的 `mpc/node.sqlite`，并使用 Android Keystore 保护用于解锁 MK 的主密码。这些 Android 文件路径、证书置备、Keystore 调用、UI 和绑定构建均未实现。应用私有存储会随卸载而删除；没有其他恢复安排时，卸载可能丢失手机分片。参见 Android 官方的[应用专属存储说明](https://developer.android.com/training/data-storage/app-specific)及 [Android Keystore 说明](https://developer.android.com/privacy-and-security/keystore)。

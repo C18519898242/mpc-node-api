@@ -42,10 +42,47 @@ func (c *Client) CreateKey(algorithm string, threshold int, keyID string) (strin
 func (c *Client) Sign(algorithm, keyID string, message []byte) (string, error) {
 	return c.embedded.Sign(algorithm, keyID, message)
 }
+
+// SignWithPath accepts a JSON array such as [0,1]. Empty, null and [] sign the root.
+// A string keeps the API compatible with future gomobile bindings.
+func (c *Client) SignWithPath(algorithm, keyID string, message []byte, chainPathJSON string) (string, error) {
+	path, err := parseChainPath(chainPathJSON)
+	if err != nil {
+		return "", err
+	}
+	return c.embedded.SignWithPath(algorithm, keyID, message, path)
+}
 func (c *Client) GeneratePresignatures(algorithm, keyID string, count int) (string, error) {
 	return c.embedded.GeneratePresignatures(algorithm, keyID, count)
 }
 func (c *Client) SignWithPresignature(algorithm, keyID, presignatureID string, message []byte) (string, error) {
 	return c.embedded.SignWithPresignature(algorithm, keyID, presignatureID, message)
 }
+
+func (c *Client) SignWithPresignatureAndPath(algorithm, keyID, presignatureID string, message []byte, chainPathJSON string) (string, error) {
+	path, err := parseChainPath(chainPathJSON)
+	if err != nil {
+		return "", err
+	}
+	return c.embedded.SignWithPresignatureAndPath(algorithm, keyID, presignatureID, message, path)
+}
+
+func parseChainPath(raw string) ([]uint32, error) {
+	var indices []*uint32
+	if raw == "" {
+		return nil, nil
+	}
+	if json.Unmarshal([]byte(raw), &indices) != nil {
+		return nil, errors.New("chainPath must be a JSON array of non-hardened indices")
+	}
+	path := make([]uint32, len(indices))
+	for i, index := range indices {
+		if index == nil || *index >= 1<<31 {
+			return nil, errors.New("chainPath must contain only non-hardened indices")
+		}
+		path[i] = *index
+	}
+	return path, nil
+}
+
 func (c *Client) Close() error { return c.embedded.Close() }

@@ -18,6 +18,7 @@ type command struct {
 	threshold                                   int
 	count                                       int
 	presignatureID                              string
+	chainPath                                   string
 }
 
 func parseCommand(args []string) (command, error) {
@@ -38,12 +39,13 @@ func parseCommand(args []string) (command, error) {
 		flags.IntVar(&cmd.count, "count", 1, "presignature batch size (1 to 8)")
 	case "sign", "signwithpresig":
 		flags.StringVar(&cmd.message, "message", "", "UTF-8 message to sign")
+		flags.StringVar(&cmd.chainPath, "chain-path", "[]", "non-hardened derivation path as a JSON array, e.g. [0,1]")
 		if cmd.mode == "signwithpresig" {
 			flags.StringVar(&cmd.presignatureID, "presignature-id", "", "explicit presignature ID from presiggen")
 		}
 	}
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
-		return cmd, errors.New("invalid command flags; use -config, -algorithm, -key-id with -threshold (keygen), -count (presiggen), or -message and -presignature-id (signwithpresig)")
+		return cmd, errors.New("invalid command flags; use -config, -algorithm, -key-id with -threshold (keygen), -count (presiggen), -message/-chain-path (sign), or -presignature-id (signwithpresig)")
 	}
 	if cmd.configPath == "" || (cmd.algorithm != "ecdsa" && cmd.algorithm != "frost") || (cmd.mode != "keygen" && strings.TrimSpace(cmd.keyID) == "") || (cmd.mode == "keygen" && cmd.threshold < 1) || (cmd.mode == "presiggen" && (cmd.count < 1 || cmd.count > 8)) {
 		return cmd, errors.New("expected config, ecdsa or frost, key-id, positive threshold for keygen and count from 1 to 8 for presiggen")
@@ -52,6 +54,17 @@ func parseCommand(args []string) (command, error) {
 		id, err := base64.RawURLEncoding.Strict().DecodeString(cmd.presignatureID)
 		if err != nil || len(id) != 32 {
 			return cmd, errors.New("expected an explicit valid presignature-id")
+		}
+	}
+	if cmd.mode == "sign" || cmd.mode == "signwithpresig" {
+		var path []*uint32
+		if json.Unmarshal([]byte(cmd.chainPath), &path) != nil {
+			return cmd, errors.New("chain-path must be a JSON array of non-hardened indices")
+		}
+		for _, index := range path {
+			if index == nil || *index >= 1<<31 {
+				return cmd, errors.New("chain-path must contain only non-hardened indices")
+			}
 		}
 	}
 	return cmd, nil

@@ -19,9 +19,31 @@ func TestCommandRejectsInvalidInputsBeforeOpeningStorage(t *testing.T) {
 		{"presiggen", "-key-id", "key", "-count", "9"},
 		{"signwithpresig", "-key-id", "key"},
 		{"signwithpresig", "-key-id", "key", "-presignature-id", "invalid"},
+		{"sign", "-key-id", "key", "-chain-path", "not-json"},
+		{"sign", "-key-id", "key", "-chain-path", "{}"},
+		{"sign", "-key-id", "key", "-chain-path", "[null]"},
+		{"sign", "-key-id", "key", "-chain-path", "[0,null]"},
+		{"sign", "-key-id", "key", "-chain-path", "[-1]"},
+		{"sign", "-key-id", "key", "-chain-path", "[2147483648]"},
+		{"sign", "-key-id", "key", "-chain-path", "[4294967296]"},
+		{"presiggen", "-key-id", "key", "-chain-path", "[0,1]"},
 	} {
 		if _, err := parseCommand(args); err == nil {
 			t.Fatalf("accepted invalid arguments: %v", args)
+		}
+	}
+}
+
+func TestSigningCommandsAcceptChainPaths(t *testing.T) {
+	for _, mode := range []string{"sign", "signwithpresig"} {
+		for _, path := range []string{"[]", "null", "[0,1,2147483647]"} {
+			args := []string{mode, "-algorithm", "frost", "-key-id", "key", "-chain-path", path}
+			if mode == "signwithpresig" {
+				args = append(args, "-presignature-id", strings.Repeat("A", 43))
+			}
+			if _, err := parseCommand(args); err != nil {
+				t.Fatalf("valid mobile chain path rejected: %v, %v", args, err)
+			}
 		}
 	}
 }
