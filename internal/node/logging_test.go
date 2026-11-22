@@ -50,9 +50,12 @@ func TestSignProtocolFailureDoesNotLogPeerError(t *testing.T) {
 	var logs bytes.Buffer
 	n := newNode(config.Config{PartyID: "1"})
 	n.logger = slog.New(slog.NewJSONHandler(&logs, nil))
-	session := n.beginSign(context.Background(), "frost-sign.sensitive-session", [32]byte{}, func(context.Context, *keygenSession) ([]byte, error) {
+	session, err := n.beginSign(context.Background(), "frost-sign.sensitive-session", [32]byte{}, func(context.Context, *keygenSession) ([]byte, error) {
 		return nil, errors.New("sensitive-peer-error")
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	<-session.done
 	assertSafeLogs(t, logs.String(), `"operation":"sign"`, `"algorithm":"frost"`, `"result":"failed"`)
 }

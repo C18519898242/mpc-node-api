@@ -57,8 +57,11 @@ func (n *node) reshareKey(algorithm string) http.HandlerFunc {
 			return
 		}
 
-		reservation, stored, err := n.keys.ReserveReshare(r.Context(), applicationID(r.Context()), op)
+		reservation, stored, session, err := n.beginReshare(r.Context(), op)
 		switch {
+		case errors.Is(err, errTooManySessions):
+			http.Error(w, "too many concurrent MPC sessions", http.StatusServiceUnavailable)
+			return
 		case errors.Is(err, sql.ErrNoRows):
 			http.NotFound(w, r)
 			return
@@ -76,7 +79,7 @@ func (n *node) reshareKey(algorithm string) http.HandlerFunc {
 		start := time.Now()
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), keygenTimeout)
 		defer cancel()
-		stage, err := n.runReshare(ctx, op, players, stored.Digest)
+		stage, err := n.runReshare(ctx, op, players, stored.Digest, session)
 		n.logMPCResult("reshare", algorithm, stage, start, err)
 		if err != nil {
 			http.Error(w, "reshare failed", http.StatusInternalServerError)
@@ -101,14 +104,32 @@ func (n *node) keyPlayers(ctx context.Context, algorithm, keyID string) (party.I
 	return share.PartyIDs(), nil
 }
 
-func (n *node) runReshare(ctx context.Context, op keystore.Reshare, players party.IDSlice, digest []byte) (string, error) {
+func (n *node) beginReshare(ctx context.Context, op keystore.Reshare) (keystore.Reservation, keystore.ReshareState, *keygenSession, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	stored, err := n.keys.LoadReshare(ctx, applicationID(ctx), op)
+	if err == nil {
+		return keystore.Completed, stored, nil, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return keystore.Conflict, stored, nil, err
+	}
+	if err := n.checkSessionCapacityLocked(applicationID(ctx)); err != nil {
+		return keystore.Conflict, stored, nil, err
+	}
+	reservation, stored, err := n.keys.ReserveReshare(ctx, applicationID(ctx), op)
+	if err != nil || reservation != keystore.Reserved {
+		return reservation, stored, nil, err
+	}
+	session := &keygenSession{incoming: make(chan *protocol.Message, 32), status: keygenStatus{State: "running"}}
+	n.sessions[sessionKey{applicationID(ctx), op.Algorithm + "-reshare." + op.SessionID}] = session
+	return reservation, stored, session, nil
+}
+
+func (n *node) runReshare(ctx context.Context, op keystore.Reshare, players party.IDSlice, digest []byte, session *keygenSession) (string, error) {
 	route := op.Algorithm + "-reshare." + op.SessionID
 	if digest == nil {
-		session := &keygenSession{incoming: make(chan *protocol.Message, 32), status: keygenStatus{State: "running"}}
 		lookup := sessionKey{applicationID(ctx), route}
-		n.mu.Lock()
-		n.sessions[lookup] = session
-		n.mu.Unlock()
 		defer func() {
 			n.mu.Lock()
 			delete(n.sessions, lookup)

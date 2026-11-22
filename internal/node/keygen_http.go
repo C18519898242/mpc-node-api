@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"net/http"
@@ -65,6 +66,10 @@ func (n *node) generateKey(w http.ResponseWriter, r *http.Request, prefix, curve
 	}
 	defer release()
 	session, err := n.beginStoredKeygen(r.Context(), prefix+sessionID, key, players, generate)
+	if errors.Is(err, errTooManySessions) {
+		http.Error(w, "too many concurrent MPC sessions", http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		http.Error(w, "could not reserve keygen", http.StatusInternalServerError)
 		return
@@ -97,11 +102,15 @@ func mpcRoutingID(sessionID string) string {
 func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Key, players party.IDSlice, generate generateShare) (*keygenSession, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.pruneSessionsLocked(time.Now())
 	if session := n.sessions[sessionKey{applicationID(ctx), id}]; session != nil {
 		if session.key == key && slices.Equal(session.players, players) {
 			return session, nil
 		}
 		return nil, nil
+	}
+	if err := n.checkSessionCapacityLocked(applicationID(ctx)); err != nil {
+		return nil, err
 	}
 	outcome, err := n.keys.Reserve(ctx, applicationID(ctx), key)
 	if err != nil || outcome == keystore.Conflict {
@@ -141,11 +150,12 @@ func (n *node) runStoredKeygen(ctx context.Context, id string, session *keygenSe
 	}
 	n.logMPCResult("keygen", session.key.Algorithm, stage, start, err)
 	n.mu.Lock()
-	defer n.mu.Unlock()
-	defer close(session.done)
 	if err != nil {
 		session.status.State = "failed"
-		return
+	} else {
+		session.status.State = "succeeded"
 	}
-	session.status.State = "succeeded"
+	n.finishSessionLocked(session)
+	close(session.done)
+	n.mu.Unlock()
 }

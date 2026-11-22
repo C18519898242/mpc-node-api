@@ -71,7 +71,11 @@ func (n *node) keyCopy(algorithm string) http.HandlerFunc {
 			defer releaseSource()
 		}
 
-		reservation, err := n.keys.Reserve(r.Context(), applicationID(r.Context()), key)
+		reservation, session, err := n.beginKeyCopy(r.Context(), key, route, sourceID, players)
+		if errors.Is(err, errTooManySessions) {
+			http.Error(w, "too many concurrent MPC sessions", http.StatusServiceUnavailable)
+			return
+		}
 		if err != nil {
 			http.Error(w, "could not reserve key copy", http.StatusInternalServerError)
 			return
@@ -84,7 +88,7 @@ func (n *node) keyCopy(algorithm string) http.HandlerFunc {
 			start := time.Now()
 			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), keygenTimeout)
 			defer cancel()
-			stage, err := n.runKeyCopy(ctx, key, route, sourceID, players)
+			stage, err := n.runKeyCopy(ctx, route, session)
 			n.logMPCResult("keycopy", algorithm, stage, start, err)
 			switch {
 			case errors.Is(err, errCopySource):
@@ -122,20 +126,36 @@ func parseKeyCopyRoute(route string) (algorithm, sessionID string, ok bool) {
 func (n *node) matchesCompletedCopy(ctx context.Context, route string, key keystore.Key, sourceID string, players party.IDSlice) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.pruneSessionsLocked(time.Now())
 	session := n.sessions[sessionKey{applicationID(ctx), route}]
 	return session != nil && session.status.State == "succeeded" && session.key == key &&
 		session.copySourceID == sourceID && slices.Equal(session.players, players)
 }
 
-func (n *node) runKeyCopy(ctx context.Context, key keystore.Key, route, sourceID string, players party.IDSlice) (stage string, err error) {
+func (n *node) beginKeyCopy(ctx context.Context, key keystore.Key, route, sourceID string, players party.IDSlice) (keystore.Reservation, *keygenSession, error) {
+	lookup := sessionKey{applicationID(ctx), route}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.pruneSessionsLocked(time.Now())
+	if n.sessions[lookup] == nil {
+		if err := n.checkSessionCapacityLocked(lookup.applicationID); err != nil {
+			return keystore.Conflict, nil, err
+		}
+	}
+	reservation, err := n.keys.Reserve(ctx, lookup.applicationID, key)
+	if err != nil || reservation != keystore.Reserved {
+		return reservation, nil, err
+	}
 	session := &keygenSession{
 		key: key, players: players, copySourceID: sourceID, status: keygenStatus{State: "running"},
 		incoming: make(chan *protocol.Message, 32), copyIncoming: make(chan *protocol.Message, 3*len(players)),
 	}
-	lookup := sessionKey{applicationID(ctx), route}
-	n.mu.Lock()
 	n.sessions[lookup] = session
-	n.mu.Unlock()
+	return reservation, session, nil
+}
+
+func (n *node) runKeyCopy(ctx context.Context, route string, session *keygenSession) (stage string, err error) {
+	key, players, sourceID := session.key, session.players, session.copySourceID
 	defer func() {
 		n.mu.Lock()
 		session.incoming, session.copyIncoming = nil, nil
@@ -143,13 +163,9 @@ func (n *node) runKeyCopy(ctx context.Context, key keystore.Key, route, sourceID
 		if err != nil {
 			session.status.State = "failed"
 		}
+		n.finishSessionLocked(session)
 		n.mu.Unlock()
 		// Slow peers can still confirm after this node has written its share.
-		time.AfterFunc(keygenTimeout, func() {
-			n.mu.Lock()
-			delete(n.sessions, lookup)
-			n.mu.Unlock()
-		})
 	}()
 	binding := sha256.Sum256(fmt.Appendf(nil, "%s:%s:%d:%q", route, key.KeyID, key.Threshold, players))
 	copy(binding[:], applicationBinding(applicationID(ctx), binding[:]))

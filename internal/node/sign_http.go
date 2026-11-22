@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -52,9 +53,17 @@ func (n *node) serveSignature(w http.ResponseWriter, r *http.Request, id, keyID 
 		http.Error(w, "could not encode signing parameters", http.StatusInternalServerError)
 		return
 	}
-	session := n.beginSign(r.Context(), id, sha256.Sum256(binding), run)
+	session, err := n.beginSign(r.Context(), id, sha256.Sum256(binding), run)
+	if errors.Is(err, errTooManySessions) {
+		http.Error(w, "too many concurrent MPC sessions", http.StatusServiceUnavailable)
+		return
+	}
+	if err != nil {
+		http.Error(w, "could not start signing session", http.StatusInternalServerError)
+		return
+	}
 	if session == nil {
-		http.Error(w, "session ID already used with different signing parameters", http.StatusConflict)
+		http.Error(w, "session ID already used or signing parameters conflict", http.StatusConflict)
 		return
 	}
 	select {
@@ -74,14 +83,24 @@ func (n *node) serveSignature(w http.ResponseWriter, r *http.Request, id, keyID 
 	}
 }
 
-func (n *node) beginSign(ctx context.Context, id string, binding [32]byte, run signOperation) *keygenSession {
+func (n *node) beginSign(ctx context.Context, id string, binding [32]byte, run signOperation) (*keygenSession, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.pruneSessionsLocked(time.Now())
 	if session := n.sessions[sessionKey{applicationID(ctx), id}]; session != nil {
 		if session.signBinding == binding {
-			return session
+			return session, nil
 		}
-		return nil
+		return nil, nil
+	}
+	if err := n.checkSessionCapacityLocked(applicationID(ctx)); err != nil {
+		return nil, err
+	}
+	if n.keys != nil {
+		fresh, err := n.keys.ReserveSession(ctx, applicationID(ctx), id)
+		if err != nil || !fresh {
+			return nil, err
+		}
 	}
 	session := &keygenSession{
 		incoming:    make(chan *protocol.Message, 32),
@@ -91,7 +110,7 @@ func (n *node) beginSign(ctx context.Context, id string, binding [32]byte, run s
 	}
 	n.sessions[sessionKey{applicationID(ctx), id}] = session
 	go n.runSign(n.operationContext(ctx), id, session, run)
-	return session
+	return session, nil
 }
 
 func (n *node) runSign(ctx context.Context, id string, session *keygenSession, run signOperation) {
@@ -102,12 +121,13 @@ func (n *node) runSign(ctx context.Context, id string, session *keygenSession, r
 	algorithm, _, _ := strings.Cut(id, "-sign.")
 	n.logMPCResult("sign", algorithm, "protocol", start, err)
 	n.mu.Lock()
-	defer n.mu.Unlock()
-	defer close(session.done)
 	if err != nil {
 		session.status.State = "failed"
-		return
+	} else {
+		session.signature = signature
+		session.status.State = "succeeded"
 	}
-	session.signature = signature
-	session.status.State = "succeeded"
+	n.finishSessionLocked(session)
+	close(session.done)
+	n.mu.Unlock()
 }

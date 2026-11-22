@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,6 +17,32 @@ import (
 	"github.com/taurusgroup/multi-party-sig/pkg/party"
 	"github.com/taurusgroup/multi-party-sig/pkg/protocol"
 )
+
+const (
+	peerRetryInitial  = 100 * time.Millisecond
+	peerRetryMax      = 2 * time.Second
+	peerRetryBudget   = 30 * time.Second
+	peerRetryAttempts = 20
+)
+
+func nextPeerRetryDelay(delay time.Duration) time.Duration {
+	if delay <= 0 {
+		return peerRetryInitial
+	}
+	delay *= 2
+	if delay > peerRetryMax {
+		return peerRetryMax
+	}
+	return delay
+}
+
+func jitterPeerRetryDelay(delay time.Duration) time.Duration {
+	spread := int64(delay) / 5
+	if spread <= 0 {
+		return delay
+	}
+	return delay - time.Duration(spread) + time.Duration(rand.Int64N(spread*2+1))
+}
 
 func (n *node) peerHandler() http.Handler {
 	mux := http.NewServeMux()
@@ -184,8 +211,15 @@ func (n *node) deliverMessage(ctx context.Context, peer party.ID, path string, b
 		path = peerApplicationPath + applicationID(ctx) + path
 	}
 	endpoint := url.URL{Scheme: scheme, Host: n.config.Peers[peer], Path: path}
-	for {
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
+	retryCtx, cancel := context.WithTimeout(ctx, peerRetryBudget)
+	defer cancel()
+	delay := peerRetryInitial
+	var lastErr error
+	for attempt := 1; ; attempt++ {
+		if err := retryCtx.Err(); err != nil {
+			return err
+		}
+		request, err := http.NewRequestWithContext(retryCtx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
 		if err != nil {
 			return err
 		}
@@ -201,14 +235,24 @@ func (n *node) deliverMessage(ctx context.Context, peer party.ID, path string, b
 			case http.StatusNoContent:
 				return nil
 			case http.StatusNotFound, http.StatusServiceUnavailable:
+				lastErr = fmt.Errorf("peer returned HTTP %d", response.StatusCode)
 			default:
 				return fmt.Errorf("peer returned HTTP %d", response.StatusCode)
 			}
+		} else {
+			lastErr = err
+		}
+		if attempt >= peerRetryAttempts && retryCtx.Err() == nil {
+			return fmt.Errorf("peer delivery failed after %d attempts: %w", attempt, lastErr)
 		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
+		case <-retryCtx.Done():
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("peer delivery retry budget exceeded: %w: %w", retryCtx.Err(), lastErr)
+		case <-time.After(jitterPeerRetryDelay(delay)):
 		}
+		delay = nextPeerRetryDelay(delay)
 	}
 }

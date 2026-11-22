@@ -115,6 +115,10 @@ func (n *node) generatePresign(w http.ResponseWriter, r *http.Request, algorithm
 		reserve, save = n.keys.ReserveFROSTPresign, n.keys.SaveFROSTPresign
 	}
 	session, err := n.beginPresign(r.Context(), id, keyID, sha256.Sum256(parameters), int(count), algorithm, generate, reserve, save)
+	if errors.Is(err, errTooManySessions) {
+		http.Error(w, "too many concurrent MPC sessions", http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		http.Error(w, "could not reserve presign batch", http.StatusInternalServerError)
 		return
@@ -143,11 +147,15 @@ func (n *node) generatePresign(w http.ResponseWriter, r *http.Request, algorithm
 func (n *node) beginPresign(ctx context.Context, id, keyID string, binding [32]byte, count int, algorithm string, generate generatePresignSlot, reserve reservePresign, save savePresign) (*keygenSession, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.pruneSessionsLocked(time.Now())
 	if session := n.sessions[sessionKey{applicationID(ctx), id}]; session != nil {
 		if session.signBinding == binding {
 			return session, nil
 		}
 		return nil, nil
+	}
+	if err := n.checkSessionCapacityLocked(applicationID(ctx)); err != nil {
+		return nil, err
 	}
 	outcome, ids, err := reserve(ctx, applicationID(ctx), id, keyID, binding)
 	if err != nil || outcome == keystore.Conflict {
@@ -202,13 +210,14 @@ func (n *node) runPresign(ctx context.Context, id string, session *keygenSession
 	}
 	n.logMPCResult("presiggen", algorithm, stage, start, err)
 	n.mu.Lock()
-	defer n.mu.Unlock()
-	defer close(session.done)
 	session.presignInboxes = nil
 	if err != nil {
 		session.status.State = "failed"
-		return
+	} else {
+		session.presignIDs = ids
+		session.status.State = "succeeded"
 	}
-	session.presignIDs = ids
-	session.status.State = "succeeded"
+	n.finishSessionLocked(session)
+	close(session.done)
+	n.mu.Unlock()
 }

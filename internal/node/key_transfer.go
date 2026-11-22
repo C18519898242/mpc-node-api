@@ -38,6 +38,8 @@ type keyTransferParameters struct {
 	Players   party.IDSlice
 	Path      []uint32
 	ExportID  []byte
+	// Imports reserve their key only after admission, while n.mu is held.
+	reserve func() bool
 }
 
 func parseKeyTransferRoute(route string) (string, string, bool) {
@@ -202,33 +204,36 @@ func (n *node) importKey(algorithm string) http.HandlerFunc {
 		}
 		defer release()
 		key := keystore.Key{Algorithm: algorithm, SessionID: "import." + sid, KeyID: request.KeyID, Threshold: request.Threshold}
-		reserved, err := n.keys.Reserve(r.Context(), applicationID(r.Context()), key)
-		if err != nil {
-			http.Error(w, "could not reserve imported key", http.StatusInternalServerError)
-			return
-		}
-		if reserved == keystore.Conflict {
-			http.Error(w, "import session or key ID already used", http.StatusConflict)
-			return
-		}
-		if reserved == keystore.Completed {
-			saved, err := n.keys.Load(r.Context(), applicationID(r.Context()), algorithm, key.KeyID)
-			defer clear(saved)
-			if err != nil {
-				http.Error(w, "could not load completed import", http.StatusInternalServerError)
-				return
-			}
-			t, roster, previous, err := n.transferShareInfo(algorithm, saved)
-			if err != nil || t != key.Threshold || !slices.Equal(roster, players) || !bytes.Equal(identity, previous) {
-				http.Error(w, "completed import does not match the request", http.StatusConflict)
-				return
-			}
-			writeImportedKey(w, key.KeyID)
-			return
-		}
 		params := keyTransferParameters{
 			Route: algorithm + "-import." + sid, KeyID: key.KeyID, SourceID: payload.KeyID,
 			Threshold: key.Threshold, Players: players, ExportID: payload.ExportID,
+		}
+		params.reserve = func() bool {
+			reserved, err := n.keys.Reserve(r.Context(), applicationID(r.Context()), key)
+			if err != nil {
+				http.Error(w, "could not reserve imported key", http.StatusInternalServerError)
+				return false
+			}
+			if reserved == keystore.Conflict {
+				http.Error(w, "import session or key ID already used", http.StatusConflict)
+				return false
+			}
+			if reserved == keystore.Completed {
+				saved, err := n.keys.Load(r.Context(), applicationID(r.Context()), algorithm, key.KeyID)
+				defer clear(saved)
+				if err != nil {
+					http.Error(w, "could not load completed import", http.StatusInternalServerError)
+					return false
+				}
+				t, roster, previous, err := n.transferShareInfo(algorithm, saved)
+				if err != nil || t != key.Threshold || !slices.Equal(roster, players) || !bytes.Equal(identity, previous) {
+					http.Error(w, "completed import does not match the request", http.StatusConflict)
+					return false
+				}
+				writeImportedKey(w, key.KeyID)
+				return false
+			}
+			return true
 		}
 		n.serveKeyTransfer(w, r, params, nil,
 			func(ctx context.Context, exchange *copyExchange, session *keygenSession) ([]byte, error) {
@@ -301,7 +306,22 @@ func (n *node) serveKeyTransfer(w http.ResponseWriter, r *http.Request, params k
 	localHash := sha256.Sum256(append(binding[:32:32], localBinding...))
 	lookup := sessionKey{applicationID(r.Context()), params.Route}
 	n.mu.Lock()
+	n.pruneSessionsLocked(time.Now())
 	session := n.sessions[lookup]
+	if session != nil && session.signBinding != localHash {
+		n.mu.Unlock()
+		http.Error(w, "key transfer session already used with different parameters", http.StatusConflict)
+		return
+	}
+	if session == nil && n.checkSessionCapacityLocked(lookup.applicationID) != nil {
+		n.mu.Unlock()
+		http.Error(w, "too many concurrent MPC sessions", http.StatusServiceUnavailable)
+		return
+	}
+	if params.reserve != nil && !params.reserve() {
+		n.mu.Unlock()
+		return
+	}
 	if session == nil {
 		algorithm, _, _ := parseKeyTransferRoute(params.Route)
 		session = &keygenSession{
@@ -313,12 +333,7 @@ func (n *node) serveKeyTransfer(w http.ResponseWriter, r *http.Request, params k
 		n.sessions[lookup] = session
 		go n.runKeyTransfer(context.WithoutCancel(r.Context()), lookup, session, binding, run)
 	}
-	matches := session.signBinding == localHash
 	n.mu.Unlock()
-	if !matches {
-		http.Error(w, "key transfer session already used with different parameters", http.StatusConflict)
-		return
-	}
 	// Keep the source key and import payload alive until the detached worker exits.
 	<-session.done
 	if session.status.State != "succeeded" {
@@ -342,10 +357,11 @@ func (n *node) runKeyTransfer(ctx context.Context, lookup sessionKey, session *k
 	algorithm, operation, _ := parseKeyTransferRoute(lookup.sessionID)
 	n.logMPCResult(operation, algorithm, "protocol", start, err)
 	n.mu.Lock()
-	defer n.mu.Unlock()
 	session.signature, session.status.State = result, "succeeded"
 	if err != nil {
 		session.status.State = "failed"
 	}
+	n.finishSessionLocked(session)
 	close(session.done)
+	n.mu.Unlock()
 }

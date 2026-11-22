@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/taurusgroup/multi-party-sig/pkg/math/curve"
 	"github.com/taurusgroup/multi-party-sig/protocols/cmp"
@@ -46,6 +48,15 @@ func (n *node) loadKeygenStatus(appID, id string) (keygenStatus, error) {
 		} else if !errors.Is(markerErr, os.ErrNotExist) {
 			return keygenStatus{}, markerErr
 		}
+		if n.keys != nil {
+			used, lookupErr := n.keys.HasSession(context.Background(), appID, "legacy-keygen."+id)
+			if lookupErr != nil {
+				return keygenStatus{}, lookupErr
+			}
+			if used {
+				return keygenStatus{SessionID: id, State: "failed"}, nil
+			}
+		}
 	}
 	if err != nil {
 		return keygenStatus{}, err
@@ -84,7 +95,18 @@ func (n *node) sharePath(appID, id string) string {
 	return filepath.Join(dir, "cmp-"+id+".share")
 }
 
-func (n *node) recordKeygenAttempt(appID, id string) error {
+func (n *node) recordKeygenAttempt(ctx context.Context, appID, id string) error {
+	if n.keys != nil {
+		fresh, err := n.keys.ReserveSession(ctx, appID, "legacy-keygen."+id)
+		if err != nil {
+			return err
+		}
+		if !fresh {
+			return os.ErrExist
+		}
+		// Share files still live beside the database, including per-application directories.
+		return os.MkdirAll(filepath.Dir(n.sharePath(appID, id)), 0700)
+	}
 	path := n.sharePath(appID, id)
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
@@ -112,7 +134,89 @@ func (n *node) saveShare(appID, id string, config *cmp.Config) (keygenStatus, er
 			return keygenStatus{}, err
 		}
 	}
-	return status, writeShareFile(n.sharePath(appID, id), data)
+	if err := writeShareFile(n.sharePath(appID, id), data); err != nil {
+		return keygenStatus{}, err
+	}
+	// The share file now makes the attempt self-describing; the marker is no
+	// longer needed to distinguish a failed attempt from a completed one.
+	_ = os.Remove(n.sharePath(appID, id) + ".started")
+	return status, nil
+}
+
+const legacyArtifactRetention = 7 * 24 * time.Hour
+
+// Old markers are compacted into durable used-ID records before removal.
+// Abandoned temporary files can be removed without affecting replay protection.
+func (n *node) cleanupLegacyArtifacts() error {
+	cutoff := time.Now().Add(-legacyArtifactRetention)
+	if err := n.cleanupLegacyArtifactDir(defaultApplication, n.config.DataDir, cutoff); err != nil {
+		return err
+	}
+	root := filepath.Join(n.config.DataDir, "applications")
+	dirs, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, dir := range dirs {
+		id, err := hex.DecodeString(dir.Name())
+		if !dir.IsDir() || err != nil || !applicationIDPattern.Match(id) || string(id) == defaultApplication {
+			continue
+		}
+		if err := n.cleanupLegacyArtifactDir(string(id), filepath.Join(root, dir.Name()), cutoff); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (n *node) cleanupLegacyArtifactDir(appID, dir string, cutoff time.Time) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		name := entry.Name()
+		stale := strings.HasPrefix(name, ".share-")
+		markerID := ""
+		if rest, ok := strings.CutSuffix(name, ".share.started"); ok {
+			id, ok := strings.CutPrefix(rest, "cmp-")
+			stale = ok && sessionIDPattern.MatchString(id)
+			if stale {
+				markerID = id
+			}
+		}
+		if !stale {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.ModTime().After(cutoff) {
+			continue
+		}
+		if markerID != "" {
+			if n.keys == nil {
+				continue
+			}
+			if _, err := n.keys.ReserveSession(context.Background(), appID, "legacy-keygen."+markerID); err != nil {
+				return err
+			}
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeShareFile(path string, data []byte) error {

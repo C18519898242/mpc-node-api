@@ -46,6 +46,8 @@ func (n *node) startKeygen(w http.ResponseWriter, r *http.Request) {
 
 	status, started, err := n.beginKeygen(r.Context(), request.SessionID)
 	switch {
+	case errors.Is(err, errTooManySessions):
+		http.Error(w, "too many concurrent MPC sessions", http.StatusServiceUnavailable)
 	case errors.Is(err, errRecordKeygenAttempt):
 		http.Error(w, "could not record keygen attempt", http.StatusInternalServerError)
 	case err != nil:

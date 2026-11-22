@@ -14,6 +14,8 @@ import (
 )
 
 type shareStore interface {
+	ReserveSession(context.Context, string, string) (bool, error)
+	HasSession(context.Context, string, string) (bool, error)
 	Reserve(context.Context, string, keystore.Key) (keystore.Reservation, error)
 	Save(context.Context, string, keystore.Key, []byte) error
 	Load(context.Context, string, string, string) ([]byte, error)

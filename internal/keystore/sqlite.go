@@ -107,6 +107,9 @@ func initSQLite(db *sql.DB, partyID string) error {
 	if _, err := tx.Exec(createMasterKeyTable); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(createSessionReservations); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

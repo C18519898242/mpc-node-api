@@ -58,6 +58,9 @@ func Serve(cfg config.Config) error {
 	}
 	defer keys.Close()
 	n.keys = keys
+	if err := n.cleanupLegacyArtifacts(); err != nil {
+		n.logger.Warn("legacy artifact cleanup failed", "node_id", string(cfg.PartyID), "result", "failed")
+	}
 	if err := n.configureRESTAuth(); err != nil {
 		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "rest_auth")
 		return err
