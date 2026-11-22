@@ -164,6 +164,14 @@ $env:MPC_NODE_API_KEY_3 = $devKeys.'3'.default
 
 节点提交 SQLite 删除事务后才返回份额。未知或已消费的 ID 返回 HTTP 404。如果部分节点超时或失败，弃用该 ID，换一个 ID 重试。恢复旧数据库备份前须清空可用预签名，防止已消费的材料重新出现。
 
+### 预签名加密存储
+
+启用 MK 的节点会对 ECDSA、FROST 的预签名 `share` 使用 AES-256-GCM 加密。每条预签名通过现有 HKDF-SHA256 从 MK 派生独立 CEK，用途为 `presign:<presignatureID>`，同时绑定节点 ID、applicationID、算法及 keyID；不复用长期私钥分片的 CEK。随机 nonce 和认证标签包含在 `share` 中，CEK 不写入数据库。
+
+`ecdsa_presignatures`、`frost_presignatures` 增加 `share_format`：`0` 为原始序列化材料，`1` 为加密材料。启用 MK 启动时，旧表自动补列，并在同一事务中将现存明文分片及预签名迁移为密文，保留 ID、创建时间和消费状态；已加密记录不会重复加密。解密与删除在同一 SQLite 事务中完成，只有认证成功且删除提交后才返回明文；密文篡改、跨记录替换或未加载对应 MK 会失败，不提交删除。
+
+加密沿用现有 MK 配置，没有新增开关。未配置 MK 的开发实例仍保留明文模式；仓库中的正常节点和手机模拟配置均启用 MK。加密不防止旧数据库快照回滚造成预签名复用，恢复备份时仍需清空可用预签名。
+
 ## 刷新密钥分片
 
 `POST /ecdsa/keys/{keyID}/reshare` 和 `POST /frost/keys/{keyID}/reshare` 刷新现有密钥在所有分片持有者上的分片。刷新保留原 `keyID`、阈值、根公钥和派生公钥。

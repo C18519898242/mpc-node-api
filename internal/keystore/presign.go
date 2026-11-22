@@ -72,10 +72,18 @@ func (s *SQLite) consumePresign(ctx context.Context, applicationID string, algor
 	defer tx.Rollback()
 
 	var share Presignature
+	var format int
 	err = tx.QueryRowContext(ctx, fmt.Sprintf(`DELETE FROM %s_presignatures WHERE id = (
 		SELECT id FROM %s_presignatures WHERE application_id = ? AND key_id = ? AND (? = '' OR presignature_id = ?)
 		ORDER BY id LIMIT 1
-	) RETURNING presignature_id, share`, algorithm, algorithm), applicationID, keyID, presignatureID, presignatureID).Scan(&share.ID, &share.Share)
+	) RETURNING presignature_id, share, share_format`, algorithm, algorithm), applicationID, keyID, presignatureID, presignatureID).Scan(&share.ID, &share.Share, &format)
+	if err == nil {
+		stored := share.Share
+		share.Share, err = s.openShare(format, presignPurpose(share.ID), applicationID, algorithm, keyID, stored)
+		if format == encryptedShare {
+			clear(stored)
+		}
+	}
 	if err == nil {
 		err = tx.Commit()
 	}
@@ -185,14 +193,22 @@ func (s *SQLite) savePresign(ctx context.Context, applicationID string, algorith
 		return nil, err
 	}
 	defer tx.Rollback()
+	var keyID string
+	if err := tx.QueryRowContext(ctx, fmt.Sprintf("SELECT key_id FROM %s_presign_batches WHERE application_id = ? AND session_id = ? AND ids IS NULL", algorithm), applicationID, sessionID).Scan(&keyID); err != nil {
+		return nil, err
+	}
 	ids := make([]string, 0, len(shares))
 	for _, share := range shares {
 		if share.ID == "" || len(share.Share) == 0 {
 			return nil, errors.New("invalid presign share")
 		}
-		result, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s_presignatures (application_id, presignature_id, key_id, share)
-			SELECT application_id, ?, key_id, ? FROM %s_presign_batches WHERE application_id = ? AND session_id = ? AND ids IS NULL`, algorithm, algorithm),
-			share.ID, share.Share, applicationID, sessionID)
+		record, format, err := s.sealShare(presignPurpose(share.ID), applicationID, algorithm, keyID, share.Share)
+		if err != nil {
+			return nil, err
+		}
+		result, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s_presignatures (application_id, presignature_id, key_id, share, share_format)
+			SELECT application_id, ?, key_id, ?, ? FROM %s_presign_batches WHERE application_id = ? AND session_id = ? AND ids IS NULL`, algorithm, algorithm),
+			share.ID, record, format, applicationID, sessionID)
 		if err != nil {
 			return nil, err
 		}

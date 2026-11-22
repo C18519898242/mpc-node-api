@@ -7,7 +7,7 @@ require (
 	github.com/fxamacker/cbor/v2 v2.4.0
 	github.com/taurusgroup/frost-ed25519 v0.0.0-20261114073414-a5e5b68e2b45
 	github.com/taurusgroup/multi-party-sig v0.0.0-20261110150323-163e25a3a0a8
-	modernc.org/sqlite v1.38.2
+	modernc.org/sqlite v1.40.1
 )
 
 require (
@@ -22,8 +22,8 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/zeebo/blake3 v0.2.3 // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
-	golang.org/x/sys v0.34.0 // indirect
-	modernc.org/libc v1.66.3 // indirect
+	golang.org/x/sys v0.36.0 // indirect
+	modernc.org/libc v1.66.10 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )

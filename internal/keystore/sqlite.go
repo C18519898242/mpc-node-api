@@ -93,7 +93,7 @@ func initSQLite(db *sql.DB, partyID string) error {
 	if err := createReshareTable(tx); err != nil {
 		return err
 	}
-	for _, table := range []string{"key_shares", "reshare_sessions"} {
+	for _, table := range []string{"key_shares", "reshare_sessions", "ecdsa_presignatures", "frost_presignatures"} {
 		var exists bool
 		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = 'share_format')", table).Scan(&exists); err != nil {
 			return err

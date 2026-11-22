@@ -66,6 +66,10 @@ func resharePurpose(sessionID string) string {
 	return "reshare:" + sessionID
 }
 
+func presignPurpose(presignatureID string) string {
+	return "presign:" + presignatureID
+}
+
 func (s *SQLite) sealShare(purpose, appID, algorithm, keyID string, data []byte) ([]byte, int, error) {
 	if s.shareCipher == nil {
 		return data, plaintextShare, nil
@@ -86,7 +90,7 @@ func (s *SQLite) openShare(format int, purpose, appID, algorithm, keyID string, 
 	}
 }
 
-// EnableShareEncryption migrates existing private shares before serving requests.
+// EnableShareEncryption migrates private shares and presignatures before serving requests.
 func (s *SQLite) EnableShareEncryption(ctx context.Context, c *ShareCipher) error {
 	if _, err := s.db.ExecContext(ctx, "PRAGMA secure_delete = ON"); err != nil {
 		return err
@@ -96,7 +100,7 @@ func (s *SQLite) EnableShareEncryption(ctx context.Context, c *ShareCipher) erro
 		return err
 	}
 	defer tx.Rollback()
-	for _, table := range []string{"key_shares", "reshare_sessions"} {
+	for _, table := range []string{"key_shares", "reshare_sessions", "ecdsa_presignatures", "frost_presignatures"} {
 		if err := encryptStoredShares(ctx, tx, c, table); err != nil {
 			return fmt.Errorf("encrypt %s: %w", table, err)
 		}
@@ -110,17 +114,23 @@ func (s *SQLite) EnableShareEncryption(ctx context.Context, c *ShareCipher) erro
 
 func encryptStoredShares(ctx context.Context, tx *sql.Tx, c *ShareCipher, table string) error {
 	const maxRowID = int64(1<<63 - 1)
-	const selectShare = `SELECT rowid, application_id, algorithm, session_id, key_id, share
+	const selectShare = `SELECT rowid, application_id, %s, %s, key_id, share
 		FROM %s WHERE share IS NOT NULL AND share_format = ? AND rowid >= ? ORDER BY rowid LIMIT 1`
-	query := fmt.Sprintf(selectShare, table)
+	query := fmt.Sprintf(selectShare, "algorithm", "session_id", table)
+	switch table {
+	case "ecdsa_presignatures":
+		query = fmt.Sprintf(selectShare, "'ecdsa'", "presignature_id", table)
+	case "frost_presignatures":
+		query = fmt.Sprintf(selectShare, "'frost'", "presignature_id", table)
+	}
 	update := "UPDATE " + table + " SET share = ?, share_format = ? WHERE rowid = ?"
 	next := -maxRowID - 1
 	for {
 		var rowID int64
-		var appID, algorithm, sessionID, keyID string
+		var appID, algorithm, recordID, keyID string
 		var plaintext []byte
 		err := tx.QueryRowContext(ctx, query, plaintextShare, next).
-			Scan(&rowID, &appID, &algorithm, &sessionID, &keyID, &plaintext)
+			Scan(&rowID, &appID, &algorithm, &recordID, &keyID, &plaintext)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -129,7 +139,9 @@ func encryptStoredShares(ctx context.Context, tx *sql.Tx, c *ShareCipher, table 
 		}
 		purpose := keySharePurpose
 		if table == "reshare_sessions" {
-			purpose = resharePurpose(sessionID)
+			purpose = resharePurpose(recordID)
+		} else if table == "ecdsa_presignatures" || table == "frost_presignatures" {
+			purpose = presignPurpose(recordID)
 		}
 		sealed, err := c.Seal(purpose, appID, algorithm, keyID, plaintext)
 		clear(plaintext)
