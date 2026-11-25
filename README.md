@@ -6,6 +6,8 @@
 
 同一套三节点助记词备份可以创建 ECDSA 和 Ed25519 两把根密钥。参见 [助记词钱包和本地测试 RSA](docs/mnemonic-wallet.md)。
 
+三节点及更多节点的容器配置和持久化方式参见 [Docker 多节点部署](docs/deployment.md)。
+
 ## 代码结构
 
 - `main.go` 解析启动参数并选择运行模式。
@@ -13,6 +15,45 @@
 - `internal/node` 运行单节点，处理 REST、节点通信和 CMP / FROST 建钥。
 - `internal/keystore` 管理 SQLite 中的建钥记录和分片。
 - `configs` 和 `scripts` 提供三节点配置、启动命令和 HTTP 冒烟测试。
+
+## Docker Desktop 三节点联调
+
+在 Docker Desktop 的 Linux 容器模式下，从仓库根目录运行。沿用 Windows 联调的 mTLS 证书和三节点主密码环境变量。
+
+```powershell
+if (!(Test-Path certs/mpc-dev/ca.crt)) { .\scripts\gen-mpc-certs.ps1 }
+. .\certs\mpc-master-passwords.ps1
+docker compose up --build -d --wait
+docker compose ps
+```
+
+首次使用且还没有 `certs/mpc-master-passwords.ps1` 时，可以先执行下面的命令生成三份独立主密码。以后保留这份文件，重启时继续使用相同的密码。
+
+```powershell
+New-Item -ItemType Directory -Force certs | Out-Null
+if (!(Test-Path certs/mpc-master-passwords.ps1)) {
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        1..3 | ForEach-Object {
+            $bytes = [byte[]]::new(32)
+            $rng.GetBytes($bytes)
+            '$env:MPC_NODE_{0}_MASTER_PASSWORD = "{1}"' -f $_, [Convert]::ToBase64String($bytes)
+        } | Set-Content -Encoding ascii certs/mpc-master-passwords.ps1
+    } finally {
+        $rng.Dispose()
+    }
+}
+```
+
+| 节点 | 本机 REST | SQLite |
+| --- | --- | --- |
+| 1 | `http://127.0.0.1:8081` | `data/docker/node-1/node.sqlite` |
+| 2 | `http://127.0.0.1:8082` | `data/docker/node-2/node.sqlite` |
+| 3 | `http://127.0.0.1:8083` | `data/docker/node-3/node.sqlite` |
+
+宿主机只发布回环 REST 端口。容器通过 `node-1:9000`、`node-2:9000`、`node-3:9000` 在 Compose 内网进行 mTLS 通讯。各容器只挂载自己的节点证书和私钥，以及共享的 CA 公钥证书。三个容器共用一份镜像，开发 API Key 仍从 `configs/dev-api-keys.json` 获取。
+
+Docker 配置在 `configs/docker/node-*.json`。`allowNonLoopbackREST` 允许 REST 监听容器网卡，启用时必须配置 API Key。与原生联调同时运行时，可以分别通过 `MPC_NODE_1_REST_PORT`、`MPC_NODE_2_REST_PORT`、`MPC_NODE_3_REST_PORT` 改宿主机映射端口。停止可运行 `docker compose down`，SQLite 文件继续留在 `data/docker`。
 
 ## Windows 三节点联调
 
