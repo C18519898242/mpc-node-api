@@ -1,0 +1,57 @@
+name: mpc-node-api-desktop
+
+x-node: &node
+  image: mpc-node-api:desktop
+  pull_policy: never
+  init: true
+  healthcheck:
+    test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+    interval: 2s
+    timeout: 2s
+    retries: 20
+
+x-ca-cert: &ca-cert
+  type: bind
+  source: ./certs/mpc-dev/ca.crt
+  target: /etc/mpc-node/tls/ca.crt
+  read_only: true
+  bind:
+    create_host_path: false
+
+services:
+  node-1:
+    <<: *node
+    build: .
+    environment:
+      MPC_MASTER_PASSWORD: ${MPC_NODE_1_MASTER_PASSWORD:?Set MPC_NODE_1_MASTER_PASSWORD}
+    ports:
+      - "127.0.0.1:${MPC_NODE_1_REST_PORT:-8081}:8080"
+    volumes:
+      - *ca-cert
+      - ./configs/docker/node-1.json:/etc/mpc-node/node.json:ro
+      - ./certs/mpc-dev/node-1:/etc/mpc-node/tls/node:ro
+      - ./data/docker/node-1:/data
+
+  node-2:
+    <<: *node
+    environment:
+      MPC_MASTER_PASSWORD: ${MPC_NODE_2_MASTER_PASSWORD:?Set MPC_NODE_2_MASTER_PASSWORD}
+    ports:
+      - "127.0.0.1:${MPC_NODE_2_REST_PORT:-8082}:8080"
+    volumes:
+      - *ca-cert
+      - ./configs/docker/node-2.json:/etc/mpc-node/node.json:ro
+      - ./certs/mpc-dev/node-2:/etc/mpc-node/tls/node:ro
+      - ./data/docker/node-2:/data
+
+  node-3:
+    <<: *node
+    environment:
+      MPC_MASTER_PASSWORD: ${MPC_NODE_3_MASTER_PASSWORD:?Set MPC_NODE_3_MASTER_PASSWORD}
+    ports:
+      - "127.0.0.1:${MPC_NODE_3_REST_PORT:-8083}:8080"
+    volumes:
+      - *ca-cert
+      - ./configs/docker/node-3.json:/etc/mpc-node/node.json:ro
+      - ./certs/mpc-dev/node-3:/etc/mpc-node/tls/node:ro
+      - ./data/docker/node-3:/data

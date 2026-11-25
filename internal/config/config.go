@@ -6,6 +6,9 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/taurusgroup/multi-party-sig/pkg/party"
 )
@@ -13,6 +16,7 @@ import (
 type Config struct {
 	PartyID                    party.ID                 `json:"partyId"`
 	RESTAddr                   string                   `json:"restAddr"`
+	AllowNonLoopbackREST       bool                     `json:"allowNonLoopbackREST,omitempty"`
 	MPCAddr                    string                   `json:"mpcAddr"`
 	DataDir                    string                   `json:"dataDir"`
 	Peers                      map[party.ID]string      `json:"peers"`
@@ -103,14 +107,16 @@ func load(path string, embedded bool) (Config, error) {
 			return cfg, fmt.Errorf("%s: legacyFrostPlayers must include this node and another player", path)
 		}
 	}
-	seen := make(map[netip.AddrPort]bool, len(addrs))
+	seen := make(map[string]bool, len(addrs))
 	for i, raw := range addrs {
-		addr, err := netip.ParseAddrPort(raw)
-		if err != nil || addr.Port() == 0 || seen[addr] || ((embedded || i >= 2) && addr.Addr().IsUnspecified()) {
-			return cfg, fmt.Errorf("%s: invalid or duplicate address %q", path, raw)
+		isPeer := embedded || i >= 2
+		allowNonLoopback := cfg.MPCTLS != nil
+		if !embedded && i == 0 {
+			allowNonLoopback = cfg.AllowNonLoopbackREST && cfg.RESTAuth != nil && len(cfg.RESTAuth.APIKeys) != 0
 		}
-		if ((!embedded && i == 0) || cfg.MPCTLS == nil) && !addr.Addr().IsLoopback() {
-			return cfg, fmt.Errorf("%s: plaintext listeners and peers must use loopback addresses, got %q", path, raw)
+		addr, ok := nodeAddress(raw, isPeer, allowNonLoopback)
+		if !ok || seen[addr] {
+			return cfg, fmt.Errorf("%s: invalid or duplicate address %q", path, raw)
 		}
 		seen[addr] = true
 	}
@@ -136,18 +142,39 @@ func load(path string, embedded bool) (Config, error) {
 
 // ValidateEmbedded checks JSON supplied directly by an embedding application.
 func ValidateEmbedded(cfg Config) error {
-	if !validPartyID(cfg.PartyID) || cfg.DataDir == "" || len(cfg.Peers) < 1 || len(cfg.MobilePeers) > 0 || cfg.MPCTLS == nil || cfg.RESTAddr != "" || cfg.MPCAddr != "" || cfg.RESTAuth != nil {
+	if !validPartyID(cfg.PartyID) || cfg.DataDir == "" || len(cfg.Peers) < 1 || len(cfg.MobilePeers) > 0 || cfg.MPCTLS == nil || cfg.RESTAddr != "" || cfg.MPCAddr != "" || cfg.RESTAuth != nil || cfg.AllowNonLoopbackREST {
 		return fmt.Errorf("embedded node requires TLS, outbound peers, dataDir and no listeners or REST auth")
 	}
-	seen := map[netip.AddrPort]bool{}
+	seen := map[string]bool{}
 	for id, raw := range cfg.Peers {
-		addr, err := netip.ParseAddrPort(raw)
-		if !validPartyID(id) || id == cfg.PartyID || err != nil || addr.Port() == 0 || addr.Addr().IsUnspecified() || seen[addr] {
+		addr, ok := nodeAddress(raw, true, true)
+		if !validPartyID(id) || id == cfg.PartyID || !ok || seen[addr] {
 			return fmt.Errorf("invalid embedded peer")
 		}
 		seen[addr] = true
 	}
 	return nil
+}
+
+var peerHostname = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
+func nodeAddress(raw string, peer, allowNonLoopback bool) (string, bool) {
+	if addr, err := netip.ParseAddrPort(raw); err == nil {
+		if addr.Port() == 0 || (peer && addr.Addr().IsUnspecified()) || (!allowNonLoopback && !addr.Addr().IsLoopback()) {
+			return "", false
+		}
+		return addr.String(), true
+	}
+	// Only authenticated MPC peers may use DNS names. Listeners still require IPs.
+	if !peer || !allowNonLoopback {
+		return "", false
+	}
+	host, portText, found := strings.Cut(raw, ":")
+	port, err := strconv.ParseUint(portText, 10, 16)
+	if !found || err != nil || port == 0 || len(host) > 253 || !peerHostname.MatchString(host) {
+		return "", false
+	}
+	return strings.ToLower(host) + ":" + strconv.FormatUint(port, 10), true
 }
 
 func validateMobilePeers(cfg Config) error {

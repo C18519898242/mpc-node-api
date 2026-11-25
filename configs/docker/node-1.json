@@ -1,0 +1,29 @@
+{
+  "partyId": "1",
+  "restAddr": "0.0.0.0:8080",
+  "allowNonLoopbackREST": true,
+  "mpcAddr": "0.0.0.0:9000",
+  "dataDir": "/data",
+  "peers": {
+    "2": "node-2:9000",
+    "3": "node-3:9000"
+  },
+  "mpcTLS": {
+    "caFile": "tls/ca.crt",
+    "certFile": "tls/node/node.crt",
+    "keyFile": "tls/node/node.key"
+  },
+  "restAuth": {
+    "apiKeys": [
+      {
+        "applicationID": "default",
+        "sha256": "+yps4r9AYwo7/NpQ7Tzo/oKOQHxxVWGYHvOh2nAHZos="
+      },
+      {
+        "applicationID": "wallet-a",
+        "sha256": "Pp303vaGduilmAqdjsgubW0jOrsQlKSwo3642XP6u9Y="
+      }
+    ]
+  },
+  "encryptorMasterPasswordEnv": "MPC_MASTER_PASSWORD"
+}

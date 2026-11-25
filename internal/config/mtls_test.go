@@ -31,3 +31,33 @@ func TestMPCNetworkRequiresTLS(t *testing.T) {
 		t.Fatal("certificate paths are not relative to the config")
 	}
 }
+
+func TestContainerNetworkConfig(t *testing.T) {
+	const tls = `,"mpcTLS":{"caFile":"ca.crt","certFile":"node.crt","keyFile":"node.key"}`
+	const optIn = `,"allowNonLoopbackREST":true`
+	const auth = `,"restAuth":{"apiKeys":[{"applicationID":"default","sha256":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]}`
+	for _, test := range []struct {
+		name, rest, peers, options string
+		valid                      bool
+	}{
+		{"authenticated container", "0.0.0.0:8080", `{"2":"node-2:9000","3":"node-3:9000"}`, tls + optIn + auth, true},
+		{"require REST opt-in", "0.0.0.0:8080", `{"2":"192.0.2.2:9000"}`, tls + auth, false},
+		{"require REST auth", "0.0.0.0:8080", `{"2":"192.0.2.2:9000"}`, tls + optIn, false},
+		{"require API key", "0.0.0.0:8080", `{"2":"192.0.2.2:9000"}`, tls + optIn + `,"restAuth":{"apiKeys":[]}`, false},
+		{"require peer TLS for DNS", "127.0.0.1:8080", `{"2":"node-2:9000"}`, "", false},
+		{"reject duplicate peer address", "127.0.0.1:8080", `{"2":"node-2:9000","3":"NODE-2:09000"}`, tls, false},
+		{"reject peer URL", "127.0.0.1:8080", `{"2":"node-2/path:9000"}`, tls, false},
+		{"reject zero peer port", "127.0.0.1:8080", `{"2":"node-2:0"}`, tls, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "node.json")
+			data := `{"partyId":"1","restAddr":"` + test.rest + `","mpcAddr":"127.0.0.1:9000","dataDir":"data","peers":` + test.peers + test.options + `}`
+			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); (err == nil) != test.valid {
+				t.Fatalf("valid=%v, error=%v", test.valid, err)
+			}
+		})
+	}
+}
