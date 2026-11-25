@@ -41,19 +41,27 @@ func (n *node) signingPlayers(w http.ResponseWriter, r *http.Request, sessionID 
 
 type signOperation func(context.Context, *keygenSession) ([]byte, error)
 
-func (n *node) serveSignature(w http.ResponseWriter, r *http.Request, id, keyID string, signers party.IDSlice, path []uint32, message []byte, algorithm string, run signOperation) {
+func (n *node) serveSignature(w http.ResponseWriter, r *http.Request, id, keyID string, signers party.IDSlice, path []uint32, message []byte, algorithm, signatureFormat string, run func(context.Context, *keygenSession, bool) ([]byte, error)) {
+	partial := signatureFormat == "partial"
+	if signatureFormat != "" && !partial {
+		http.Error(w, "invalid signature format", http.StatusBadRequest)
+		return
+	}
 	binding, err := json.Marshal(struct {
 		SessionID string
 		KeyID     string
 		Signers   party.IDSlice
 		Path      []uint32
 		Digest    []byte
-	}{id, keyID, signers, append([]uint32(nil), path...), message})
+		Partial   bool `json:",omitempty"`
+	}{id, keyID, signers, append([]uint32(nil), path...), message, partial})
 	if err != nil {
 		http.Error(w, "could not encode signing parameters", http.StatusInternalServerError)
 		return
 	}
-	session, err := n.beginSign(r.Context(), id, sha256.Sum256(binding), run)
+	session, err := n.beginSign(r.Context(), id, sha256.Sum256(binding), func(ctx context.Context, session *keygenSession) ([]byte, error) {
+		return run(ctx, session, partial)
+	})
 	if errors.Is(err, errTooManySessions) {
 		http.Error(w, "too many concurrent MPC sessions", http.StatusServiceUnavailable)
 		return
@@ -77,6 +85,11 @@ func (n *node) serveSignature(w http.ResponseWriter, r *http.Request, id, keyID 
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if partial {
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write(session.signature)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(struct {
 			Signature []byte `json:"signature"`
 		}{session.signature})

@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -22,8 +23,9 @@ func (n *node) signFROST(w http.ResponseWriter, r *http.Request) {
 	keyID := r.PathValue("keyID")
 	sessionID := r.Header.Get("MPC-SessionID")
 	var request struct {
-		ChainPath []uint32 `json:"chainPath"`
-		Message   []byte   `json:"message"`
+		ChainPath       []uint32 `json:"chainPath"`
+		Message         []byte   `json:"message"`
+		SignatureFormat string   `json:"signatureFormat"`
 	}
 	if !keyIDPattern.MatchString(keyID) || !memorySessionPattern.MatchString(sessionID) ||
 		decodeJSON(w, r, &request, 4096) != nil || request.Message == nil {
@@ -65,14 +67,27 @@ func (n *node) signFROST(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := frostSignPrefix + sessionID
-	n.serveSignature(w, r, id, keyID, signers, request.ChainPath, request.Message, "FROST",
-		func(ctx context.Context, session *keygenSession) ([]byte, error) {
+	n.serveSignature(w, r, id, keyID, signers, request.ChainPath, request.Message, "FROST", request.SignatureFormat,
+		func(ctx context.Context, session *keygenSession, partial bool) ([]byte, error) {
 			if len(request.ChainPath) != 0 {
 				secret, public, err := share.Public.DeriveShare(share.SecretKey, share.chainCode(), request.ChainPath)
 				if err != nil {
 					return nil, err
 				}
 				share.Output = keygen.Output{SecretKey: secret, Public: public}
+			}
+			if partial {
+				binding := sha256.Sum256(append(session.signBinding[:32:32], share.Public.GroupKey.ToEd25519()...))
+				var presign frostPresignShare
+				defer clear(presign.Nonces[:])
+				if _, err := n.exchangeFROSTCommitments(ctx, id, binding, signers, ids, session.incoming, &presign); err != nil {
+					return nil, err
+				}
+				sig, err := makeFROSTPresignPartial(&share.Output, &presign, ids, "", request.Message)
+				if err != nil {
+					return nil, err
+				}
+				return json.Marshal(sig)
 			}
 			state, output, err := frost.NewSignState(selected, share.SecretKey, share.Public, request.Message, 0)
 			if err != nil {

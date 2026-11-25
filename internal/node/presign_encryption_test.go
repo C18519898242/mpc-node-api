@@ -128,6 +128,21 @@ func TestEncryptedPresignSigningAfterRestart(t *testing.T) {
 			body, _ := json.Marshal(request)
 			replies := all(keyPath+"/signwithpresig", "", body)
 			verifyEncryptedPresignResult(t, algorithm, replies, public.PublicKey, message)
+			delete(request, "presignatureId")
+			request["signatureFormat"] = "partial"
+			online, _ := json.Marshal(request)
+			onlineReplies := all(keyPath+"/sign", "shares", online)
+			verifyEncryptedPresignResult(t, algorithm, onlineReplies, public.PublicKey, message)
+			for _, reply := range onlineReplies {
+				if reply.Header().Get("Cache-Control") != "no-store" {
+					t.Fatal("partial signature response must not be cached")
+				}
+			}
+			delete(request, "signatureFormat")
+			full, _ := json.Marshal(request)
+			if w := call(0, keyPath+"/sign", "shares", full); w.Code != 409 {
+				t.Fatalf("reused online session with different signature format returned %d", w.Code)
+			}
 			for i := range nodes {
 				if w := call(i, keyPath+"/signwithpresig", "", body); w.Code != 404 {
 					t.Fatalf("reused encrypted presignature returned %d", w.Code)

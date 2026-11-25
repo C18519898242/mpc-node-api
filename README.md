@@ -132,6 +132,8 @@ $env:MPC_NODE_API_KEY_3 = $devKeys.'3'.default
 
 `messageHash` 是标准 Base64 编码的 32 字节摘要。可传非硬化 BIP32 路径使用派生密钥。每个参与节点返回 `{"signature":"..."}`，其中 `signature` 是完整的 DER ECDSA 签名，使用标准 Base64 编码，可直接验签。签名会话和结果保留在进程内存中。
 
+需要在客户端合成时，同一会话的所有请求都在 JSON 中加上 `"signatureFormat":"partial"`。节点生成一次性签名材料，并各自返回 `sShare`、`r`、`publicKey`、`playerIndex`、`threshold` 和 `sharing` 等字段。SDK 用 `ECDSAFinalizeSignature` 合成本会话所有参与者的分片。一次性签名材料在内存中使用，预签名表无需提前填充。
+
 `POST /ecdsa/keys/{keyID}/{count}/presiggen?mpc_routing_id=<routingID>` 为根密钥批量预计算。向指定的 `MPC-Players` 并发发送空请求体，使用同一个新会话 ID。单批支持 1 至 8 份。节点将整批本地材料写入各自的 `node.sqlite` 后返回 `{"ids":["..."]}`。调用方应等全部参与节点成功并比对有序 ID 列表。已完成的同参数会话在重启后也返回原批次 ID，已消费的 ID 不会因此重新可用。预签名材料用于本机联调，使用与密钥分片相同的存储保护。
 
 `POST /ecdsa/keys/{keyID}/signwithpresig` 在单个节点消费预签名，无需 MPC 会话头。请求示例：
@@ -157,6 +159,8 @@ $env:MPC_NODE_API_KEY_3 = $devKeys.'3'.default
 `POST /frost/keys/{keyID}/publickey` 可向任意持有分片的单个节点查询 Ed25519 公钥，无需 MPC 会话头。请求体传 `{"chainPath":null}` 或 `{"chainPath":[]}` 查询根公钥，传 `{"chainPath":[0,1]}` 查询子公钥。响应的 `curve` 为 `ed25519`，`publicKey` 是标准 Base64 编码的 32 字节 Ed25519 公钥。索引范围为 0 至 2147483647，硬化索引返回 HTTP 400。
 
 `POST /frost/keys/{keyID}/sign?mpc_routing_id=<routingID>` 使用与 ECDSA 签名相同的会话头。向选定节点并发发送同一份请求，例如 `{"chainPath":[0,1],"message":"aGVsbG8="}`。`message` 是原始消息的标准 Base64 编码，示例签名的是 `hello`。每个参与节点返回 `{"signature":"..."}`，其中 `signature` 是 Base64 编码的完整 64 字节 Ed25519 签名，可用同一路径查询到的公钥和原始消息直接验签。
+
+同一会话都传 `"signatureFormat":"partial"` 时，参与节点交换并核对一次性承诺，然后各自返回签名分片。SDK 用原始消息和所有参与者的分片调用 `SchnorrFinalizeSignature` 得到 64 字节签名。
 
 普通 FROST 建钥记录使用根公钥确定初始 chain code，现有数据库记录可直接派生。非硬化派生规则由 `go.mod` 锁定的 FROST fork 提供。
 

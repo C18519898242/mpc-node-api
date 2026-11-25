@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -23,7 +25,10 @@ type ecdsaSignRequest struct {
 func (n *node) signECDSA(w http.ResponseWriter, r *http.Request) {
 	keyID := r.PathValue("keyID")
 	sessionID := r.Header.Get("MPC-SessionID")
-	var request ecdsaSignRequest
+	var request struct {
+		ecdsaSignRequest
+		SignatureFormat string `json:"signatureFormat"`
+	}
 	if !keyIDPattern.MatchString(keyID) || !memorySessionPattern.MatchString(sessionID) ||
 		decodeJSON(w, r, &request, 4096) != nil || len(request.MessageHash) != sha256.Size {
 		http.Error(w, "invalid ECDSA signing request", http.StatusBadRequest)
@@ -57,8 +62,22 @@ func (n *node) signECDSA(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := ecdsaSignPrefix + sessionID
-	n.serveSignature(w, r, id, keyID, signers, request.ChainPath, request.MessageHash, "ECDSA",
-		func(ctx context.Context, session *keygenSession) ([]byte, error) {
+	n.serveSignature(w, r, id, keyID, signers, request.ChainPath, request.MessageHash, "ECDSA", request.SignatureFormat,
+		func(ctx context.Context, session *keygenSession, partial bool) ([]byte, error) {
+			if partial {
+				result, err := n.runCMP(ctx, id, session.signBinding[:], cmp.Presign(share, signers, nil), session.incoming, signers)
+				if err != nil {
+					return nil, err
+				}
+				presign := result.(*cmpECDSA.PreSignature)
+				presignID := base64.RawURLEncoding.EncodeToString(presign.ID)
+				sig, err := makeECDSAPresignPartial(share, share, presign, presignID, request.MessageHash)
+				if err != nil {
+					return nil, err
+				}
+				sig.PresignatureID = ""
+				return json.Marshal(sig)
+			}
 			result, err := n.runCMP(ctx, id, session.signBinding[:], cmp.Sign(share, signers, request.MessageHash, nil), session.incoming, signers)
 			if err != nil {
 				return nil, err
