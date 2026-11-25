@@ -234,19 +234,19 @@ ECDSA 和 FROST 都提供以下两个接口，使用 API Key 和与建钥相同�
 
 导出默认关闭。只有显式设置 `keyTransfer.exportEnabled = true`，才会开放 ECDSA 和 FROST 的 `exportkey`、`exportkeyshare`。省略配置或设为 `false` 时，这些接口返回 403。仓库中的三个节点配置均将其设为 `false`，启用后需要重启节点。导入接口沿用自己的 RSA 私钥配置。
 
-以下示例开启导出。相对路径以节点配置文件为基准。`exportWrappingKeys` 可选，用于允许向额外的 RSA SPKI DER 公钥导出，JSON 中公钥使用 Base64。启用导出后，节点允许向自己的 wrapping 公钥导出。
+每个节点用 `keyTransfer.exportWrappingKeys` 限定导出接收方。请求中的 `wrappingKey` 必须匹配名单中的一把 RSA 公钥，即使请求使用本节点自己的 wrapping 公钥也必须显式列出。省略名单、名单为空或请求使用未列出的公钥，合法格式的导出请求会返回 403。迁移时可在每个源节点只填对应目标节点的 RSA 公钥。配置中的公钥使用标准 Base64 编码的 RSA SPKI DER。
 
 ```json
 {
   "keyTransfer": {
     "exportEnabled": true,
     "wrappingPrivateKeyFile": "../certs/key-transfer-dev-4096/rsa-private.pem",
-    "exportWrappingKeys": []
+    "exportWrappingKeys": ["<对应目标节点的 Base64 SPKI DER RSA 公钥>"]
   }
 }
 ```
 
-本机三节点配置使用一套临时测试 RSA 密钥。新的开发环境先运行 `go run ./cmd/mpc-wrapkeygen` 生成 4096 位 RSA 密钥。私钥、PEM 公钥和 DER 公钥保存在 Git 忽略的 `certs/key-transfer-dev-4096` 下。该命令保留已有文件，避免替换已使用的解包私钥。RSA 私钥只在节点本机读取。导入保存到当前 API Key 所属应用，开启 MK 的节点会用 CEK 加密落库。
+本机三节点配置使用一套临时测试 RSA 密钥。新的开发环境先运行 `go run ./cmd/mpc-wrapkeygen` 生成 4096 位 RSA 密钥。私钥、PEM 公钥和 DER 公钥保存在 Git 忽略的 `certs/key-transfer-dev-4096` 下。该命令保留已有文件，避免替换已使用的解包私钥。测试导出到本节点时，把该 DER 公钥的 Base64 值填进白名单。私钥文件路径以节点配置文件为基准，RSA 私钥只在节点本机读取。导入保存到当前 API Key 所属应用，开启 MK 的节点会用 CEK 加密落库。
 
 导出包采用本项目版本 1 的分片格式，可供本项目节点导入。Blockdaemon SDK 的包裹格式需要单独适配。密码保护外层由调用方本地处理。
 

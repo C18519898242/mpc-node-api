@@ -54,12 +54,6 @@ func (n *node) allowWrappingKey(key *rsa.PublicKey) bool {
 		return false
 	}
 	der, _ := x509.MarshalPKIXPublicKey(key)
-	if n.wrappingKey != nil {
-		own, _ := x509.MarshalPKIXPublicKey(&n.wrappingKey.PublicKey)
-		if bytes.Equal(der, own) {
-			return true
-		}
-	}
 	for _, allowed := range n.config.KeyTransfer.ExportWrappingKeys {
 		if bytes.Equal(allowed, der) {
 			return true

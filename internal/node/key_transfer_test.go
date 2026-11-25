@@ -67,8 +67,9 @@ func TestKeyTransferRoundTrip(t *testing.T) {
 			for i := range cfgs {
 				cfgs[i] = config.Config{
 					PartyID: party.ID(fmt.Sprint(i + 1)), DataDir: t.TempDir(),
-					Peers:    map[party.ID]string{party.ID(fmt.Sprint(2 - i)): fmt.Sprint(2 - i)},
-					RESTAuth: &config.RESTAuthConfig{}, KeyTransfer: &config.KeyTransferConfig{ExportEnabled: true},
+					Peers:             map[party.ID]string{party.ID(fmt.Sprint(2 - i)): fmt.Sprint(2 - i)},
+					RESTAuth:          &config.RESTAuthConfig{},
+					KeyTransfer:       &config.KeyTransferConfig{ExportEnabled: true, ExportWrappingKeys: [][]byte{der}},
 					EmergencyRecovery: &config.EmergencyRecoveryConfig{Enabled: true, PublicKeys: [][]byte{der}},
 				}
 				for _, app := range []string{"a", "b"} {
@@ -341,7 +342,7 @@ func TestKeyWrapRejectsWrongKey(t *testing.T) {
 	}
 	n := newNode(config.Config{KeyTransfer: &config.KeyTransferConfig{ExportEnabled: true}})
 	n.wrappingKey = first
-	if !n.allowWrappingKey(&first.PublicKey) || n.allowWrappingKey(&second.PublicKey) {
+	if n.allowWrappingKey(&first.PublicKey) || n.allowWrappingKey(&second.PublicKey) {
 		t.Fatal("export wrapping key policy did not enforce the allowlist")
 	}
 	allowed, err := x509.MarshalPKIXPublicKey(&second.PublicKey)
@@ -349,7 +350,7 @@ func TestKeyWrapRejectsWrongKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	n.config.KeyTransfer.ExportWrappingKeys = [][]byte{allowed}
-	if !n.allowWrappingKey(&second.PublicKey) {
-		t.Fatal("explicitly allowed wrapping key was rejected")
+	if n.allowWrappingKey(&first.PublicKey) || !n.allowWrappingKey(&second.PublicKey) {
+		t.Fatal("only the explicitly listed export wrapping key should be allowed")
 	}
 }
