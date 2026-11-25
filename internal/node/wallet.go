@@ -55,14 +55,25 @@ func splitWalletRoute(route string) (string, int, bool) {
 }
 
 func (n *node) createWallet(w http.ResponseWriter, r *http.Request) {
-	if n.walletBackup == nil {
+	cfg := n.config.WalletBackup
+	if cfg == nil || (n.walletBackup == nil && !cfg.AllowRequestPublicKeys) {
 		http.Error(w, "wallet backup is not configured", http.StatusForbidden)
 		return
 	}
 	sid := r.Header.Get("MPC-SessionID")
-	var request *struct{}
-	if !memorySessionPattern.MatchString(sid) || decodeJSON(w, r, &request, 1024) != nil || request == nil {
-		http.Error(w, "expected a wallet session ID and an empty JSON object", http.StatusBadRequest)
+	var request *struct {
+		BackupPublicKeys json.RawMessage `json:"backupPublicKeys"`
+	}
+	if !memorySessionPattern.MatchString(sid) || decodeJSON(w, r, &request, 16384) != nil || request == nil {
+		http.Error(w, "invalid wallet session or request body", http.StatusBadRequest)
+		return
+	}
+	if request.BackupPublicKeys != nil && !cfg.AllowRequestPublicKeys {
+		http.Error(w, "wallet backup public keys in requests are disabled", http.StatusForbidden)
+		return
+	}
+	if request.BackupPublicKeys == nil && n.walletBackup == nil {
+		http.Error(w, "wallet backup requires a configured public key or backupPublicKeys", http.StatusBadRequest)
 		return
 	}
 	players := n.signingPlayers(w, r, sid)
@@ -73,8 +84,13 @@ func (n *node) createWallet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "wallet creation requires all three configured nodes", http.StatusBadRequest)
 		return
 	}
+	backupPlan, err := n.prepareWalletBackup(players, request.BackupPublicKeys)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	receipt := walletIDs(applicationID(r.Context()), sid)
-	session, err := n.beginWallet(r.Context(), sid, receipt, players)
+	session, err := n.beginWallet(r.Context(), sid, receipt, players, backupPlan)
 	switch {
 	case errors.Is(err, errTooManySessions):
 		http.Error(w, "too many concurrent MPC sessions", http.StatusServiceUnavailable)
@@ -100,20 +116,29 @@ func (n *node) createWallet(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(receipt)
 }
 
-func (n *node) beginWallet(ctx context.Context, sid string, receipt walletReceipt, players party.IDSlice) (*keygenSession, error) {
+func (n *node) beginWallet(ctx context.Context, sid string, receipt walletReceipt, players party.IDSlice, plan walletBackupPlan) (*keygenSession, error) {
 	app := applicationID(ctx)
 	lookup := sessionKey{app, "wallet." + sid}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.pruneSessionsLocked(time.Now())
+	var binding [32]byte
+	var requestDigest []byte
+	if plan.keyIDs[0] != "" {
+		binding = sha256.Sum256([]byte(strings.Join(plan.keyIDs[:], "")))
+		requestDigest = binding[:]
+	}
 	if session := n.sessions[lookup]; session != nil {
+		if session.signBinding != binding {
+			return nil, nil
+		}
 		return session, nil
 	}
-	status, err := n.keys.WalletStatus(ctx, app, sid)
+	status, err := n.keys.WalletStatus(ctx, app, sid, requestDigest)
 	if err != nil || status == keystore.Conflict {
 		return nil, err
 	}
-	session := &keygenSession{done: make(chan struct{}), players: players}
+	session := &keygenSession{done: make(chan struct{}), players: players, signBinding: binding}
 	if status == keystore.Completed {
 		session.status.State = "succeeded"
 		close(session.done)
@@ -122,7 +147,7 @@ func (n *node) beginWallet(ctx context.Context, sid string, receipt walletReceip
 	if err := n.checkSessionCapacityLocked(app); err != nil {
 		return nil, err
 	}
-	reserved, err := n.keys.ReserveWallet(ctx, app, sid, receipt.WalletID)
+	reserved, err := n.keys.ReserveWallet(ctx, app, sid, receipt.WalletID, requestDigest)
 	if err != nil || !reserved {
 		return nil, err
 	}
@@ -132,15 +157,15 @@ func (n *node) beginWallet(ctx context.Context, sid string, receipt walletReceip
 		session.walletInboxes[i] = make(chan *protocol.Message, 32)
 	}
 	n.sessions[lookup] = session
-	go n.runWallet(n.operationContext(ctx), sid, receipt, session)
+	go n.runWallet(n.operationContext(ctx), sid, receipt, session, plan)
 	return session, nil
 }
 
-func (n *node) runWallet(ctx context.Context, sid string, receipt walletReceipt, session *keygenSession) {
+func (n *node) runWallet(ctx context.Context, sid string, receipt walletReceipt, session *keygenSession, plan walletBackupPlan) {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, keygenTimeout)
 	defer cancel()
-	stage, err := n.generateWallet(ctx, sid, receipt, session)
+	stage, err := n.generateWallet(ctx, sid, receipt, session, plan)
 	n.logMPCResult("createwallet", "wallet", stage, start, err)
 	n.mu.Lock()
 	session.status.State = "succeeded"

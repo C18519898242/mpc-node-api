@@ -27,7 +27,8 @@ type Config struct {
 }
 
 type WalletBackupConfig struct {
-	PublicKey []byte `json:"publicKey"` // Base64-encoded PKIX DER RSA public key.
+	PublicKey              []byte `json:"publicKey,omitempty"` // Base64-encoded PKIX DER RSA public key.
+	AllowRequestPublicKeys bool   `json:"allowRequestPublicKeys,omitempty"`
 }
 
 type EmergencyRecoveryConfig struct {

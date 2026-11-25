@@ -38,7 +38,7 @@ type walletManifest struct {
 	FROST   recovery.Ed25519PublicContribution `json:"frost"`
 }
 
-func (n *node) generateWallet(ctx context.Context, sid string, receipt walletReceipt, session *keygenSession) (string, error) {
+func (n *node) generateWallet(ctx context.Context, sid string, receipt walletReceipt, session *keygenSession, plan walletBackupPlan) (string, error) {
 	app := applicationID(ctx)
 	mnemonic, err := recovery.GenerateMnemonic()
 	if err != nil {
@@ -54,19 +54,23 @@ func (n *node) generateWallet(ctx context.Context, sid string, receipt walletRec
 		return "mnemonic", err
 	}
 	defer clear(ed25519.Scalar[:])
-	backup, err := n.sealMnemonic(app, receipt.WalletID, mnemonic)
+	backup, err := n.sealMnemonic(app, receipt.WalletID, mnemonic, plan)
 	if err != nil {
 		return "backup", err
 	}
 	local := walletContribution{backup.KeyID, ecdsa.Public, ed25519.Public}
+	binding := []byte("wallet/v1/" + sid + "/" + receipt.WalletID)
+	if plan.keyIDs[0] != "" {
+		binding = append(append(binding, 0), session.signBinding[:]...)
+	}
 	x := &copyExchange{
 		node: n, route: "wallet." + sid, players: session.players, incoming: session.incoming,
-		binding: sha256.Sum256(applicationBinding(app, []byte("wallet/v1/"+sid+"/"+receipt.WalletID))),
+		binding: sha256.Sum256(applicationBinding(app, binding)),
 		received: map[string]map[party.ID][]byte{
 			walletContributions: {}, walletContributionAck: {}, walletFROSTBroadcast: {}, walletFROSTAck: {}, walletReady: {},
 		},
 	}
-	manifest, err := x.walletManifest(ctx, local)
+	manifest, err := x.walletManifest(ctx, local, plan.keyIDs)
 	if err != nil {
 		return "contributions", err
 	}
@@ -100,7 +104,7 @@ func (n *node) generateWallet(ctx context.Context, sid string, receipt walletRec
 	return "storage", n.keys.SaveWallet(ctx, app, sid, receipt.WalletID, receipt.ECDSAKeyID, receipt.FROSTKeyID, encoded, backup, cmpShare, frostShare)
 }
 
-func (x *copyExchange) walletManifest(ctx context.Context, local walletContribution) (walletManifest, error) {
+func (x *copyExchange) walletManifest(ctx context.Context, local walletContribution, expectedKeyIDs [3]string) (walletManifest, error) {
 	manifest := walletManifest{Version: 1, Players: x.players}
 	body, err := json.Marshal(local)
 	if err != nil {
@@ -125,6 +129,9 @@ func (x *copyExchange) walletManifest(ctx context.Context, local walletContribut
 		key, err := hex.DecodeString(public.BackupKeyID)
 		if err != nil || len(key) != sha256.Size || public.BackupKeyID != hex.EncodeToString(key) || keys[public.BackupKeyID] {
 			return manifest, errors.New("wallet nodes require distinct backup RSA keys")
+		}
+		if expectedKeyIDs[i] != "" && public.BackupKeyID != expectedKeyIDs[i] {
+			return manifest, errors.New("wallet backup RSA key differs from the request")
 		}
 		keys[public.BackupKeyID] = true
 		ecdsa[i], frost[i] = public.ECDSA, public.FROST

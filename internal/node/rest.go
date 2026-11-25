@@ -25,6 +25,7 @@ func (n *node) restHandler() http.Handler {
 	mux := healthMux()
 	n.registerProtocols(mux)
 	mux.HandleFunc("POST /wallets", n.logRequest("createwallet", "wallet", n.createWallet))
+	mux.HandleFunc("GET /wallets/{walletID}/backup", n.logRequest("readwalletbackup", "wallet", n.getWalletBackup))
 	mux.HandleFunc("POST /key/{keyID}/count/presigs", n.logRequest("countpresigs", "key", n.countPresign))
 	mux.HandleFunc("DELETE /key/{keyID}", n.logRequest("deletekeyshare", "key", n.deleteKeyShare))
 	mux.HandleFunc("DELETE /key/{keyID}/presigs", n.logRequest("deletepresigs", "key", n.deletePresign))

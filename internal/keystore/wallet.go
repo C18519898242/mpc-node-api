@@ -1,6 +1,7 @@
 package keystore
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -18,10 +19,26 @@ const createWalletBackups = `CREATE TABLE IF NOT EXISTS wallet_backups (
 	backup_key_id TEXT,
 	wrapped_key BLOB,
 	ciphertext BLOB,
+	backup_request_digest BLOB,
 	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	UNIQUE(application_id, session_id),
 	UNIQUE(application_id, wallet_id)
 )`
+
+func migrateWalletBackups(tx *sql.Tx) error {
+	if _, err := tx.Exec(createWalletBackups); err != nil {
+		return err
+	}
+	var exists bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM pragma_table_info('wallet_backups') WHERE name = 'backup_request_digest')").Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		_, err := tx.Exec("ALTER TABLE wallet_backups ADD COLUMN backup_request_digest BLOB")
+		return err
+	}
+	return nil
+}
 
 type MnemonicBackup struct {
 	Version    int
@@ -30,24 +47,35 @@ type MnemonicBackup struct {
 	Ciphertext []byte
 }
 
+// LoadWalletBackup reads a committed backup in the authenticated application's wallet namespace.
+func (s *SQLite) LoadWalletBackup(ctx context.Context, app, wallet string) (MnemonicBackup, []byte, error) {
+	var backup MnemonicBackup
+	var manifest []byte
+	err := s.db.QueryRowContext(ctx, `SELECT format_version, backup_key_id, wrapped_key, ciphertext, manifest
+		FROM wallet_backups WHERE application_id = ? AND wallet_id = ? AND manifest IS NOT NULL`,
+		app, wallet).Scan(&backup.Version, &backup.KeyID, &backup.WrappedKey, &backup.Ciphertext, &manifest)
+	return backup, manifest, err
+}
+
 // WalletStatus returns Reserved for an unused ID and Conflict for an unfinished
 // attempt. Only committed receipts can be retried after a restart.
-func (s *SQLite) WalletStatus(ctx context.Context, app, session string) (Reservation, error) {
+func (s *SQLite) WalletStatus(ctx context.Context, app, session string, requestDigest []byte) (Reservation, error) {
 	var completed bool
-	err := s.db.QueryRowContext(ctx, `SELECT manifest IS NOT NULL FROM wallet_backups
-		WHERE application_id = ? AND session_id = ?`, app, session).Scan(&completed)
+	var storedDigest []byte
+	err := s.db.QueryRowContext(ctx, `SELECT manifest IS NOT NULL, backup_request_digest FROM wallet_backups
+		WHERE application_id = ? AND session_id = ?`, app, session).Scan(&completed, &storedDigest)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Reserved, nil
 	}
-	if completed && err == nil {
+	if err == nil && completed && bytes.Equal(storedDigest, requestDigest) {
 		return Completed, nil
 	}
 	return Conflict, err
 }
 
-func (s *SQLite) ReserveWallet(ctx context.Context, app, session, wallet string) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `INSERT INTO wallet_backups (application_id, session_id, wallet_id)
-		VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, app, session, wallet)
+func (s *SQLite) ReserveWallet(ctx context.Context, app, session, wallet string, requestDigest []byte) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `INSERT INTO wallet_backups (application_id, session_id, wallet_id, backup_request_digest)
+		VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`, app, session, wallet, requestDigest)
 	if err != nil {
 		return false, err
 	}

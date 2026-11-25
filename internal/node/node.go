@@ -14,8 +14,9 @@ import (
 )
 
 type shareStore interface {
-	WalletStatus(context.Context, string, string) (keystore.Reservation, error)
-	ReserveWallet(context.Context, string, string, string) (bool, error)
+	LoadWalletBackup(context.Context, string, string) (keystore.MnemonicBackup, []byte, error)
+	WalletStatus(context.Context, string, string, []byte) (keystore.Reservation, error)
+	ReserveWallet(context.Context, string, string, string, []byte) (bool, error)
 	SaveWallet(context.Context, string, string, string, string, string, []byte, keystore.MnemonicBackup, []byte, []byte) error
 	ReserveSession(context.Context, string, string) (bool, error)
 	HasSession(context.Context, string, string) (bool, error)
