@@ -98,6 +98,10 @@ func (n *node) receiveMessage(w http.ResponseWriter, r *http.Request) {
 
 func (n *node) acceptMessage(w http.ResponseWriter, r *http.Request, id string, message *protocol.Message) {
 	batchID, slot, presign := splitPresignRoute(id)
+	walletID, walletSlot, wallet := splitWalletRoute(id)
+	if wallet {
+		batchID = walletID
+	}
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -113,6 +117,15 @@ func (n *node) acceptMessage(w http.ResponseWriter, r *http.Request, id string, 
 		http.Error(w, "MPC session failed on this node", http.StatusConflict)
 	default:
 		incoming := session.incoming
+		if wallet {
+			if !session.players.Contains(message.From) || n.config.Peers[message.From] == "" {
+				http.Error(w, "unexpected wallet player", http.StatusBadRequest)
+				return
+			}
+			if walletSlot >= 0 {
+				incoming = session.walletInboxes[walletSlot]
+			}
+		}
 		if session.copyIncoming != nil {
 			if !session.players.Contains(message.From) {
 				http.Error(w, "unexpected key copy player", http.StatusBadRequest)
@@ -139,6 +152,9 @@ func (n *node) acceptMessage(w http.ResponseWriter, r *http.Request, id string, 
 }
 
 func validPeerSessionID(id string) bool {
+	if _, _, ok := splitWalletRoute(id); ok {
+		return true
+	}
 	if _, _, ok := parseKeyTransferRoute(id); ok {
 		return true
 	}

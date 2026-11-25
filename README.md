@@ -4,6 +4,8 @@
 
 手机节点的本地模拟（一个出站连接的嵌入式节点 + 两个服务端）：[运行、存储位置与 Android 接入边界](docs/mobile-nodes.md)。
 
+同一套三节点助记词备份可以创建 ECDSA 和 Ed25519 两把根密钥。参见 [助记词钱包和本地测试 RSA](docs/mnemonic-wallet.md)。
+
 ## 代码结构
 
 - `main.go` 解析启动参数并选择运行模式。

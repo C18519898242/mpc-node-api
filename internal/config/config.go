@@ -23,6 +23,11 @@ type Config struct {
 	EncryptorMasterPasswordEnv string                   `json:"encryptorMasterPasswordEnv,omitempty"`
 	KeyTransfer                *KeyTransferConfig       `json:"keyTransfer,omitempty"`
 	EmergencyRecovery          *EmergencyRecoveryConfig `json:"emergencyRecovery,omitempty"`
+	WalletBackup               *WalletBackupConfig      `json:"walletBackup,omitempty"`
+}
+
+type WalletBackupConfig struct {
+	PublicKey []byte `json:"publicKey"` // Base64-encoded PKIX DER RSA public key.
 }
 
 type EmergencyRecoveryConfig struct {

@@ -40,6 +40,7 @@ type keygenSession struct {
 	signBinding    [32]byte
 	signature      []byte
 	presignInboxes []chan *protocol.Message
+	walletInboxes  [2]chan *protocol.Message
 	presignIDs     []string
 	players        party.IDSlice
 }
@@ -133,6 +134,7 @@ func (n *node) checkSessionCapacityLocked(app string) error {
 func (n *node) finishSessionLocked(session *keygenSession) {
 	session.completedAt = time.Now()
 	session.incoming, session.copyIncoming, session.presignInboxes = nil, nil, nil
+	session.walletInboxes = [2]chan *protocol.Message{}
 }
 
 func (n *node) getKeygenStatus(ctx context.Context, id string) (keygenStatus, error) {

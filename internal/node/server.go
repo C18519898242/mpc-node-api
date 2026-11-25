@@ -43,6 +43,9 @@ func Serve(cfg config.Config) error {
 		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "key_transfer")
 		return err
 	}
+	if err := n.configureWalletBackup(); err != nil {
+		return err
+	}
 	tlsConfig, err := n.configurePeerTLS()
 	if err != nil {
 		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "mpc_tls")

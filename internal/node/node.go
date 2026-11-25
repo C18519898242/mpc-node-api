@@ -14,6 +14,9 @@ import (
 )
 
 type shareStore interface {
+	WalletStatus(context.Context, string, string) (keystore.Reservation, error)
+	ReserveWallet(context.Context, string, string, string) (bool, error)
+	SaveWallet(context.Context, string, string, string, string, string, []byte, keystore.MnemonicBackup, []byte, []byte) error
 	ReserveSession(context.Context, string, string) (bool, error)
 	HasSession(context.Context, string, string) (bool, error)
 	Reserve(context.Context, string, keystore.Key) (keystore.Reservation, error)
@@ -51,6 +54,7 @@ type node struct {
 	keys            shareStore
 	shareCipher     *keystore.ShareCipher
 	wrappingKey     *rsa.PrivateKey
+	walletBackup    *rsa.PublicKey
 	mobileMailboxes map[mobileMailboxKey]*mobileMailbox
 	embedded        bool
 	workerContext   context.Context

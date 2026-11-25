@@ -110,6 +110,9 @@ func initSQLite(db *sql.DB, partyID string) error {
 	if _, err := tx.Exec(createSessionReservations); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(createWalletBackups); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
