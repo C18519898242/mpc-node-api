@@ -18,7 +18,7 @@ func (n *node) deleteKeyShare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "key delete request body must be empty", http.StatusBadRequest)
 		return
 	}
-	for _, algorithm := range []string{"ecdsa", "frost"} {
+	for _, algorithm := range []string{"ecdsa", "frost", "rsa"} {
 		release := n.lockKeyOperation(w, applicationID(r.Context()), algorithm, keyID, true)
 		if release == nil {
 			return

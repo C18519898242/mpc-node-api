@@ -152,6 +152,27 @@ $env:MPC_NODE_API_KEY_3 = $devKeys.'3'.default
 
 协议对象的 `version` 标识节点间 MPC 消息的兼容版本，由实现统一声明。节点配置文件继续管理本地端口、数据目录和对端节点。Blockdaemon Go SDK 的同名接口使用整数协议编号，直接调用本接口的客户端应按上面的对象结构解析。
 
+## RSA 门限建钥和签名
+
+`POST /rsa/keys?mpc_routing_id=<routingID>` 沿用 ECDSA 建钥的会话头。向选定节点并发发送相同的 `MPC-SessionID`、`MPC-Players` 和请求体。节点须配置 MPC mTLS 和主密码，参与方须是可直接连接的服务端节点。
+
+```json
+{"bits":2048,"threshold":1,"keyID":""}
+```
+
+`bits` 可填 `2048`、`3072`、`4096`。签名门限按 `threshold + 1` 计算，三个节点传 `1` 为 2 签 3，传 `2` 为 3 签 3。建钥时全组选定节点都要参加。每个节点返回 `{"keyID":"..."}`，调用方应等所有节点成功，并核对 `keyID` 一致。
+
+生成安全素数耗时随密钥位数变化。节点建钥会话上限为 15 分钟。若全组未完成，使用新会话 ID、新 `keyID` 重试。
+
+选定节点中按 `partyId` 字符串排序的第一台是可信分发方。它用 CIRCL `tss/rsa` 生成完整私钥，再通过 mTLS 向各参与节点分发对应的分片。数据库按应用保存本节点的加密分片和 RSA 公钥。配置齐全的节点在 `/info/protocols` 中报告 `circl-tss-rsa`。 [CIRCL RSA 门限签名](https://github.com/cloudflare/circl/tree/main/tss/rsa)
+
+| 接口 | 请求体 | 响应 |
+| --- | --- | --- |
+| `POST /rsa/keys/{keyID}/publickey` | `{}` 或空请求体 | `publicKey` 为 Base64 编码的 SPKI DER，`players` 为建钥总人数，`requiredSigners` 为最少签名节点数 |
+| `POST /rsa/keys/{keyID}/sign` | `{"messageHash":"<Base64 编码的 32 字节 SHA-256 摘要>"}` | `partialSignature` 为 Base64 编码的 CIRCL 签名分片 |
+
+查询和签名沿用 API Key 应用隔离。签名使用 SHA-256 + PKCS#1 v1.5，各节点独立计算，无需 MPC 会话或节点间通信。用同一个 `keyID` 和摘要调用至少 `requiredSigners` 个不同的分片持有节点，然后在 Go SDK 合并并验签。
+
 ## ECDSA 建钥接口
 
 `POST /ecdsa/keys?mpc_routing_id=<routingID>`。对 `MPC-Players` 指定的节点并发发送同一份 JSON 和会话头。
@@ -321,7 +342,7 @@ ECDSA 和 FROST 新增 `POST /{algorithm}/keys/{keyID}/recoverydata`。参与节
 
 节点将 JSON 日志写入标准错误。建钥、签名和公钥查询记录节点 ID、操作、算法、状态、结果和耗时。MPC 后台任务还记录失败阶段和超时。日志不包含密钥 ID、会话 ID、请求体、认证头、消息、摘要、签名、分片或底层错误原文。
 
-使用 Go 1.24 或更新版本。在仓库根目录执行 `go run .` 可单独运行健康检查，默认监听 `127.0.0.1:8080`，可通过 `MPC_NODE_HTTP_ADDR` 修改。
+使用 Go 1.25 或更新版本。在仓库根目录执行 `go run .` 可单独运行健康检查，默认监听 `127.0.0.1:8080`，可通过 `MPC_NODE_HTTP_ADDR` 修改。
 
 ```sh
 curl http://127.0.0.1:8080/healthz

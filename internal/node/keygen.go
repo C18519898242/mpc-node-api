@@ -43,6 +43,7 @@ type keygenSession struct {
 	walletInboxes  [2]chan *protocol.Message
 	presignIDs     []string
 	players        party.IDSlice
+	rsaBits        int
 }
 
 type keygenStatus struct {

@@ -53,19 +53,22 @@ func (n *node) generateKey(w http.ResponseWriter, r *http.Request, prefix, curve
 		http.Error(w, "invalid "+curve+" keygen parameters", http.StatusBadRequest)
 		return
 	}
-	if request.KeyID == "" {
-		digest := sha256.Sum256([]byte(prefix + sessionID))
-		request.KeyID = base64.RawURLEncoding.EncodeToString(digest[:21])
-	}
-	key := keystore.Key{
-		Algorithm: prefix[:len(prefix)-1], SessionID: sessionID, KeyID: request.KeyID, Threshold: request.Threshold,
+	key := keystore.Key{Algorithm: prefix[:len(prefix)-1], SessionID: sessionID, KeyID: request.KeyID, Threshold: request.Threshold}
+	n.serveStoredKeygen(w, r, key, curve, players, 0, generate)
+}
+
+func (n *node) serveStoredKeygen(w http.ResponseWriter, r *http.Request, key keystore.Key, algorithmName string, players party.IDSlice, rsaBits int, generate generateShare) {
+	route := key.Algorithm + "." + key.SessionID
+	if key.KeyID == "" {
+		digest := sha256.Sum256([]byte(route))
+		key.KeyID = base64.RawURLEncoding.EncodeToString(digest[:21])
 	}
 	release := n.lockKeyOperation(w, applicationID(r.Context()), key.Algorithm, key.KeyID, false)
 	if release == nil {
 		return
 	}
 	defer release()
-	session, err := n.beginStoredKeygen(r.Context(), prefix+sessionID, key, players, generate)
+	session, err := n.beginStoredKeygen(r.Context(), route, key, players, rsaBits, generate)
 	if errors.Is(err, errTooManySessions) {
 		http.Error(w, "too many concurrent MPC sessions", http.StatusServiceUnavailable)
 		return
@@ -85,7 +88,7 @@ func (n *node) generateKey(w http.ResponseWriter, r *http.Request, prefix, curve
 		return
 	case <-session.done:
 		if session.status.State != "succeeded" {
-			http.Error(w, curve+" keygen failed", http.StatusInternalServerError)
+			http.Error(w, algorithmName+" keygen failed", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -99,12 +102,12 @@ func mpcRoutingID(sessionID string) string {
 	return fmt.Sprintf("%016x", h.Sum64()&0x7fffffffffffffff)
 }
 
-func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Key, players party.IDSlice, generate generateShare) (*keygenSession, error) {
+func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Key, players party.IDSlice, rsaBits int, generate generateShare) (*keygenSession, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.pruneSessionsLocked(time.Now())
 	if session := n.sessions[sessionKey{applicationID(ctx), id}]; session != nil {
-		if session.key == key && slices.Equal(session.players, players) {
+		if session.key == key && session.rsaBits == rsaBits && slices.Equal(session.players, players) {
 			return session, nil
 		}
 		return nil, nil
@@ -122,11 +125,24 @@ func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Ke
 		done:     make(chan struct{}),
 		key:      key,
 		players:  players,
+		rsaBits:  rsaBits,
 	}
 	if outcome == keystore.Completed {
-		storedPlayers, err := n.keyPlayers(ctx, key.Algorithm, key.KeyID)
-		if err != nil || !slices.Equal(storedPlayers, players) {
-			return nil, err
+		if rsaBits != 0 {
+			data, err := n.keys.Load(ctx, applicationID(ctx), key.Algorithm, key.KeyID)
+			if err != nil {
+				return nil, err
+			}
+			matches := validRSAKeyShare(data, n.config.PartyID, players, key.Threshold, rsaBits)
+			clear(data)
+			if !matches {
+				return nil, nil
+			}
+		} else {
+			storedPlayers, err := n.keyPlayers(ctx, key.Algorithm, key.KeyID)
+			if err != nil || !slices.Equal(storedPlayers, players) {
+				return nil, err
+			}
 		}
 		session.status.State = "succeeded"
 		close(session.done)
@@ -139,7 +155,11 @@ func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Ke
 
 func (n *node) runStoredKeygen(ctx context.Context, id string, session *keygenSession, generate generateShare) {
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(ctx, keygenTimeout)
+	timeout := keygenTimeout
+	if session.rsaBits != 0 {
+		timeout = rsaKeygenTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	share, err := generate(ctx, id, session)
 	defer clear(share)

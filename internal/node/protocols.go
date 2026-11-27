@@ -10,7 +10,7 @@ const serviceMajorVersion = "1"
 type protocolInfo struct {
 	ID      string `json:"-"`
 	Name    string `json:"name"`
-	Curve   string `json:"curve"`
+	Curve   string `json:"curve,omitempty"`
 	Version int    `json:"version"`
 }
 
@@ -80,6 +80,12 @@ func (n *node) registerProtocols(mux *http.ServeMux) {
 		mux.HandleFunc(base+"/{keyID}/exportkeyshare", n.logRequest("exportkeyshare", id, n.exportLocalKeyShare(id)))
 		mux.HandleFunc(base+"/importkeyshare", n.logRequest("importkeyshare", id, n.importLocalKeyShare(id)))
 		mux.HandleFunc(base+"/{keyID}/recoverydata", n.logRequest("recoverydata", id, n.generateRecoveryData(id)))
+	}
+	mux.HandleFunc("POST /rsa/keys", n.logRequest("keygen", "rsa", n.generateRSAKey))
+	mux.HandleFunc("POST /rsa/keys/{keyID}/publickey", n.logRequest("publickey", "rsa", n.rsaPublicKey))
+	mux.HandleFunc("POST /rsa/keys/{keyID}/sign", n.logRequest("sign", "rsa", n.signRSA))
+	if n.rsaEnabled() {
+		info["rsa"] = protocolInfo{Name: "circl-tss-rsa", Version: 1}
 	}
 	mux.HandleFunc("GET /version", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

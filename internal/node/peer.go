@@ -117,6 +117,10 @@ func (n *node) acceptMessage(w http.ResponseWriter, r *http.Request, id string, 
 		http.Error(w, "MPC session failed on this node", http.StatusConflict)
 	default:
 		incoming := session.incoming
+		if session.rsaBits != 0 && !session.players.Contains(message.From) {
+			http.Error(w, "unexpected RSA keygen player", http.StatusBadRequest)
+			return
+		}
 		if wallet {
 			if !session.players.Contains(message.From) || n.config.Peers[message.From] == "" {
 				http.Error(w, "unexpected wallet player", http.StatusBadRequest)
@@ -178,6 +182,9 @@ func validPeerSessionID(id string) bool {
 		return memorySessionPattern.MatchString(sessionID)
 	}
 	if sessionID, ok := strings.CutPrefix(id, frostSessionPrefix); ok {
+		return memorySessionPattern.MatchString(sessionID)
+	}
+	if sessionID, ok := strings.CutPrefix(id, rsaSessionPrefix); ok {
 		return memorySessionPattern.MatchString(sessionID)
 	}
 	return sessionIDPattern.MatchString(id)

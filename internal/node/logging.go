@@ -40,6 +40,8 @@ type statusWriter struct {
 	status int
 }
 
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 // net/http can include panic values and stack traces in its diagnostic text.
 type httpErrorLog struct{}
 
