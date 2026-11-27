@@ -14,8 +14,8 @@ import (
 	"slices"
 	"time"
 
+	thresholdrsa "github.com/C18519898242/circl/tss/rsa"
 	"github.com/C18519898242/mpc-node-api/internal/keystore"
-	thresholdrsa "github.com/cloudflare/circl/tss/rsa"
 	"github.com/taurusgroup/multi-party-sig/pkg/party"
 	"github.com/taurusgroup/multi-party-sig/pkg/protocol"
 )
@@ -25,12 +25,32 @@ const (
 	rsaReadyMessage  = "rsa-keygen/ready"
 	rsaShareMessage  = "rsa-keygen/share"
 	rsaKeygenTimeout = 15 * time.Minute
+	rsaUsageSign     = "sign"
+	rsaUsageDecrypt  = "decrypt"
 )
 
+type rsaKeygenParams struct {
+	bits  int
+	usage string
+}
+
 type storedRSAKeyShare struct {
-	Players   party.IDSlice `json:"players"`
-	PublicKey []byte        `json:"publicKey"`
-	Share     []byte        `json:"share"`
+	Players            party.IDSlice `json:"players"`
+	PublicKey          []byte        `json:"publicKey"`
+	Share              []byte        `json:"share,omitempty"`
+	Usage              string        `json:"usage,omitempty"`
+	DecryptionKeyShare []byte        `json:"decryptionKeyShare,omitempty"`
+}
+
+func rsaKeyUsage(usage string) string {
+	switch usage {
+	case "", rsaUsageSign:
+		return rsaUsageSign
+	case rsaUsageDecrypt:
+		return rsaUsageDecrypt
+	default:
+		return ""
+	}
 }
 
 func (n *node) rsaEnabled() bool {
@@ -61,21 +81,35 @@ func (n *node) generateRSAKey(w http.ResponseWriter, r *http.Request) {
 		Bits      int    `json:"bits"`
 		Threshold int    `json:"threshold"`
 		KeyID     string `json:"keyID"`
+		Usage     string `json:"usage"`
 	}
 	if decodeJSON(w, r, &request, 4096) != nil || (request.Bits != 2048 && request.Bits != 3072 && request.Bits != 4096) ||
 		request.Threshold < 1 || request.Threshold >= len(players) || (request.KeyID != "" && !keyIDPattern.MatchString(request.KeyID)) {
 		http.Error(w, "invalid RSA keygen parameters", http.StatusBadRequest)
 		return
 	}
+	usage := rsaKeyUsage(request.Usage)
+	if usage == "" {
+		http.Error(w, "invalid RSA key usage", http.StatusBadRequest)
+		return
+	}
+	if usage == rsaUsageDecrypt && !rsaDecryptionAllowed(r) {
+		http.Error(w, "RSA decryption requires an authorized API key and HTTPS", http.StatusForbidden)
+		return
+	}
 	key := keystore.Key{Algorithm: "rsa", SessionID: sid, KeyID: request.KeyID, Threshold: request.Threshold}
 	// Safe-prime generation can take longer than an elliptic-curve keygen session.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(rsaKeygenTimeout + 5*time.Second))
-	n.serveStoredKeygen(w, r, key, "RSA", players, request.Bits, n.generateRSAKeyShare)
+	n.serveStoredKeygen(w, r, key, "RSA", players, rsaKeygenParams{bits: request.Bits, usage: usage}, n.generateRSAKeyShare)
 }
 
 func (n *node) generateRSAKeyShare(ctx context.Context, route string, session *keygenSession) ([]byte, error) {
 	self, dealer := n.config.PartyID, session.players[0]
-	transcript := fmt.Appendf(nil, "%s:%s:%d:%d:%q", route, session.key.KeyID, session.key.Threshold, session.rsaBits, session.players)
+	transcript := fmt.Appendf(nil, "%s:%s:%d:%d:%q", route, session.key.KeyID, session.key.Threshold, session.rsaParams.bits, session.players)
+	// Keep the original signing transcript so existing signing nodes can participate.
+	if session.rsaParams.usage == rsaUsageDecrypt {
+		transcript = append(transcript, ":decrypt"...)
+	}
 	binding := sha256.Sum256(applicationBinding(applicationID(ctx), transcript))
 	if self != dealer {
 		ready := &protocol.Message{SSID: binding[:], From: self, To: dealer, Protocol: rsaReadyMessage}
@@ -87,7 +121,7 @@ func (n *node) generateRSAKeyShare(ctx context.Context, route string, session *k
 			return nil, ctx.Err()
 		case message := <-session.incoming:
 			if message.From == dealer && message.To == self && message.Protocol == rsaShareMessage && bytes.Equal(message.SSID, binding[:]) &&
-				validRSAKeyShare(message.Data, self, session.players, session.key.Threshold, session.rsaBits) {
+				validRSAKeyShare(message.Data, self, session.players, session.key.Threshold, session.rsaParams) {
 				return message.Data, nil
 			}
 			clear(message.Data)
@@ -114,7 +148,7 @@ func (n *node) generateRSAKeyShare(ctx context.Context, route string, session *k
 
 func (n *node) dealRSAKey(ctx context.Context, route string, session *keygenSession, binding [32]byte) ([]byte, error) {
 	random := rsaKeygenRandom{ctx}
-	private, err := thresholdrsa.GenerateKey(random, session.rsaBits)
+	private, err := thresholdrsa.GenerateKey(random, session.rsaParams.bits)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +169,14 @@ func (n *node) dealRSAKey(ctx context.Context, route string, session *keygenSess
 			return nil, err
 		}
 		defer clear(data)
-		return json.Marshal(storedRSAKeyShare{Players: session.players, PublicKey: public, Share: data})
+		stored := storedRSAKeyShare{Players: session.players, PublicKey: public, Usage: session.rsaParams.usage}
+		// Older binaries only load share, so they cannot use decryption keys for signing.
+		if stored.Usage == rsaUsageDecrypt {
+			stored.DecryptionKeyShare = data
+		} else {
+			stored.Share = data
+		}
+		return json.Marshal(stored)
 	}
 	for i, peer := range session.players[1:] {
 		payload, err := encode(&shares[i+1])
@@ -152,9 +193,10 @@ func (n *node) dealRSAKey(ctx context.Context, route string, session *keygenSess
 	return encode(&shares[0])
 }
 
-func validRSAKeyShare(data []byte, self party.ID, players party.IDSlice, threshold, bits int) bool {
+func validRSAKeyShare(data []byte, self party.ID, players party.IDSlice, threshold int, params rsaKeygenParams) bool {
 	key, err := decodeStoredRSAKeyShare(data, self)
-	return err == nil && slices.Equal(key.players, players) && key.publicKey.N.BitLen() == bits && key.share.Threshold == uint(threshold+1)
+	return err == nil && key.usage == params.usage && slices.Equal(key.players, players) &&
+		key.publicKey.N.BitLen() == params.bits && key.share.Threshold == uint(threshold+1)
 }
 
 type rsaKeyData struct {
@@ -162,14 +204,29 @@ type rsaKeyData struct {
 	publicDER []byte
 	publicKey *rsa.PublicKey
 	share     thresholdrsa.KeyShare
+	usage     string
 }
 
 func decodeStoredRSAKeyShare(data []byte, self party.ID) (*rsaKeyData, error) {
 	var stored storedRSAKeyShare
 	err := json.Unmarshal(data, &stored)
 	defer clear(stored.Share)
+	defer clear(stored.DecryptionKeyShare)
 	if err != nil {
 		return nil, errors.New("invalid RSA key share record")
+	}
+	usage := rsaKeyUsage(stored.Usage)
+	if usage == "" {
+		return nil, errors.New("invalid stored RSA key usage")
+	}
+	encodedShare := stored.Share
+	if usage == rsaUsageDecrypt {
+		if len(stored.Share) != 0 {
+			return nil, errors.New("invalid stored RSA decryption share")
+		}
+		encodedShare = stored.DecryptionKeyShare
+	} else if len(stored.DecryptionKeyShare) != 0 {
+		return nil, errors.New("invalid stored RSA signing share")
 	}
 	public, err := x509.ParsePKIXPublicKey(stored.PublicKey)
 	key, ok := public.(*rsa.PublicKey)
@@ -183,11 +240,11 @@ func decodeStoredRSAKeyShare(data []byte, self party.ID) (*rsaKeyData, error) {
 	}
 	var share thresholdrsa.KeyShare
 	index := slices.Index(stored.Players, self)
-	if index < 0 || share.UnmarshalBinary(stored.Share) != nil || share.Index != uint(index+1) ||
+	if index < 0 || share.UnmarshalBinary(encodedShare) != nil || share.Index != uint(index+1) ||
 		share.Players != uint(len(stored.Players)) || share.Threshold < 2 || share.Threshold > share.Players {
 		return nil, errors.New("invalid stored RSA share metadata")
 	}
-	return &rsaKeyData{stored.Players, stored.PublicKey, key, share}, nil
+	return &rsaKeyData{players: stored.Players, publicDER: stored.PublicKey, publicKey: key, share: share, usage: usage}, nil
 }
 
 // CIRCL's safe-prime search reads randomness for each candidate.

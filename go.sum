@@ -1,5 +1,9 @@
+filippo.io/bigmod v0.1.0 h1:UNzDk7y9ADKST+axd9skUpBQeW7fG2KrTZyOE4uGQy8=
+filippo.io/bigmod v0.1.0/go.mod h1:OjOXDNlClLblvXdwgFFOQFJEocLhhtai8vGLy0JCZlI=
 filippo.io/edwards25519 v1.0.0-rc.1 h1:m0VOOB23frXZvAOK44usCgLWvtsxIoMCTBGJZlpmGfU=
 filippo.io/edwards25519 v1.0.0-rc.1/go.mod h1:N1IkdkCkiLB6tki+MYJoSx2JTY9NUlxZE7eHn5EwJns=
+github.com/C18519898242/circl/tss/rsa v0.1.0 h1:9Vzodk7awbFJa5glzvQ7euckwwfotv2EK12qSrYGaNU=
+github.com/C18519898242/circl/tss/rsa v0.1.0/go.mod h1:5yoP6CqxnNIY6i1p5BKA75p9DUSrelyi/mJ0O4PtUvw=
 github.com/C18519898242/frost-ed25519 v0.0.0-20261114073414-a5e5b68e2b45 h1:aH9I59EzMz3vVnzueNKlvYeaD7pOkskMlP9Dp/JHb40=
 github.com/C18519898242/frost-ed25519 v0.0.0-20261114073414-a5e5b68e2b45/go.mod h1:HvWEpeV7Nptyy1OAzxcb/DvYOhrFfzMUx0CFrzUgQbg=
 github.com/C18519898242/mpc-wallet-recovery v0.0.0-20261114073711-2c2216ed1b0e h1:wYOkweW1NiwpMt9Uaw7OVlaHH6PGwXLHvyOhdjmErNc=

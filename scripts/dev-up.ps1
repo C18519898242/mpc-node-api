@@ -22,7 +22,10 @@ try {
     foreach ($path in $paths) {
         $processes += Start-Process -FilePath $binary -ArgumentList @('-config', ('"{0}"' -f $path)) -PassThru -NoNewWindow
     }
-    $urls = @($nodes | ForEach-Object { "http://$($_.restAddr)" })
+    $urls = @($nodes | ForEach-Object {
+        $scheme = if ($null -eq $_.restTLS) { 'http' } else { 'https' }
+        "${scheme}://$($_.restAddr)"
+    })
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     foreach ($url in $urls) {
         while ($true) {

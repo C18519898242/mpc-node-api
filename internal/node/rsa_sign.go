@@ -10,7 +10,7 @@ import (
 	"io"
 	"net/http"
 
-	thresholdrsa "github.com/cloudflare/circl/tss/rsa"
+	thresholdrsa "github.com/C18519898242/circl/tss/rsa"
 )
 
 func (n *node) rsaPublicKey(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +55,10 @@ func (n *node) signRSA(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	data := n.readRSAKey(w, r, keyID)
 	if data == nil {
+		return
+	}
+	if data.usage != rsaUsageSign {
+		http.Error(w, "RSA key does not permit signing", http.StatusForbidden)
 		return
 	}
 	// Both the modulus and the share come from the authenticated local record.

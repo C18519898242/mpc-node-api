@@ -75,8 +75,8 @@ func (n *node) authorizeMobile(handler http.HandlerFunc, control bool) http.Hand
 	return func(w http.ResponseWriter, r *http.Request) {
 		peer := n.verifiedPeer(r)
 		allowed := n.config.MobilePeers[peer]
-		app := n.authenticateAPIKey(r)
-		if allowed == "" || app == "" || app != allowed {
+		credential := n.authenticateAPIKey(r)
+		if allowed == "" || credential == nil || credential.applicationID != allowed {
 			http.Error(w, "unauthorized mobile peer", http.StatusForbidden)
 			return
 		}
@@ -84,7 +84,7 @@ func (n *node) authorizeMobile(handler http.HandlerFunc, control bool) http.Hand
 			http.Error(w, "mobile player must participate", http.StatusBadRequest)
 			return
 		}
-		handler(w, withApplication(r, app))
+		handler(w, withApplication(r, credential.applicationID))
 	}
 }
 

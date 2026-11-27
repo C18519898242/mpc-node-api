@@ -61,3 +61,37 @@ func TestContainerNetworkConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestRESTCertificateConfiguration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "node.json")
+	base := `{"partyId":"1","restAddr":"127.0.0.1:8081","mpcAddr":"127.0.0.1:9081",
+		"dataDir":"data","peers":{"2":"127.0.0.1:9082"},"restTLS":`
+	write := func(tls string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(base+tls+"}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"certFile":"rest.crt"}`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("REST TLS accepted a missing keyFile")
+	}
+	write(`{"certFile":"rest.crt","keyFile":"rest.key"}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RESTTLS == nil || cfg.RESTTLS.CertFile != filepath.Join(dir, "rest.crt") || cfg.RESTTLS.KeyFile != filepath.Join(dir, "rest.key") {
+		t.Fatal("REST certificate paths are not relative to the config")
+	}
+	const decryptionAuth = `,"restAuth":{"apiKeys":[{"applicationID":"default","sha256":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","rsaDecryption":true}]}`
+	write(`null` + decryptionAuth)
+	if _, err := Load(path); err == nil {
+		t.Fatal("RSA decryption credential was accepted without REST TLS")
+	}
+	write(`{"certFile":"rest.crt","keyFile":"rest.key"}` + decryptionAuth)
+	if _, err := Load(path); err != nil {
+		t.Fatal(err)
+	}
+}

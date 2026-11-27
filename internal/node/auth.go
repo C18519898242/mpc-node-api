@@ -24,6 +24,7 @@ var applicationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`
 type apiKeyCredential struct {
 	digest        [sha256.Size]byte
 	applicationID string
+	rsaDecryption bool
 }
 
 func (n *node) configureRESTAuth() error {
@@ -47,7 +48,7 @@ func (n *node) configureRESTAuth() error {
 			return fmt.Errorf("duplicate restAuth API key entry %d", index+1)
 		}
 		seen[digest] = true
-		credentials = append(credentials, apiKeyCredential{digest: digest, applicationID: key.ApplicationID})
+		credentials = append(credentials, apiKeyCredential{digest: digest, applicationID: key.ApplicationID, rsaDecryption: key.RSADecryption})
 		applications[key.ApplicationID] = struct{}{}
 	}
 	n.credentials, n.applications = credentials, applications
@@ -55,6 +56,7 @@ func (n *node) configureRESTAuth() error {
 }
 
 type applicationContextKey struct{}
+type rsaDecryptionContextKey struct{}
 
 func applicationID(ctx context.Context) string {
 	if id, ok := ctx.Value(applicationContextKey{}).(string); ok {
@@ -67,39 +69,51 @@ func withApplication(r *http.Request, id string) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), applicationContextKey{}, id))
 }
 
+func rsaDecryptionAllowed(r *http.Request) bool {
+	allowed, _ := r.Context().Value(rsaDecryptionContextKey{}).(bool)
+	return r.TLS != nil && allowed
+}
+
 func (n *node) requireAPIKey(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		id := n.authenticateAPIKey(r)
-		if id == "" {
+		credential := n.authenticateAPIKey(r)
+		if credential == nil {
 			w.Header().Set("WWW-Authenticate", "APIKEY")
 			http.Error(w, "unauthorized API key", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, withApplication(r, id))
+		if credential.rsaDecryption && r.TLS == nil {
+			http.Error(w, "RSA decryption credentials require HTTPS", http.StatusForbidden)
+			return
+		}
+		r = withApplication(r, credential.applicationID)
+		r = r.WithContext(context.WithValue(r.Context(), rsaDecryptionContextKey{}, credential.rsaDecryption))
+		next.ServeHTTP(w, r)
 	})
 }
 
-func (n *node) authenticateAPIKey(r *http.Request) string {
+func (n *node) authenticateAPIKey(r *http.Request) *apiKeyCredential {
 	headers := r.Header.Values("Authorization")
 	if len(headers) != 1 {
-		return ""
+		return nil
 	}
 	scheme, key, ok := strings.Cut(headers[0], " ")
 	if !ok || !strings.EqualFold(scheme, "APIKEY") || key == "" || strings.ContainsAny(key, " \t,") {
-		return ""
+		return nil
 	}
 	digest := sha256.Sum256([]byte(key))
-	var applicationID string
-	for _, credential := range n.credentials {
+	var matched *apiKeyCredential
+	for i := range n.credentials {
+		credential := &n.credentials[i]
 		if subtle.ConstantTimeCompare(digest[:], credential.digest[:]) == 1 {
-			applicationID = credential.applicationID
+			matched = credential
 		}
 	}
-	return applicationID
+	return matched
 }
 
 // Keep the original protocol binding for the existing database's application.

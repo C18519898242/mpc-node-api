@@ -83,3 +83,13 @@ curl --fail --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080
 部署验证可以先创建一把测试密钥，再逐个重启节点，使用原 `keyID` 查询公钥。三个节点都恢复后，用同一把密钥签名并验签。
 
 Kubernetes 或 EKS 使用同一镜像，为每个节点分别挂载配置、证书和独立的持久卷，保持相同的容器内路径。
+
+## 为 REST 启用 HTTPS
+
+在各节点配置 `restTLS.certFile` 和 `restTLS.keyFile`，并将证书和私钥只读挂载。REST 证书必须覆盖探活和 SDK 使用的域名或 IP。RSA 门限解密要求 REST 启用 HTTPS，还需要给受信任的合并端配置 `rsaDecryption: true` 的 API Key。
+
+启用后，`/healthz` 也走 HTTPS。上面的 HTTP 探活示例和仓库 Compose 的默认健康检查适用于默认开发配置。为 Compose 启用 REST TLS 时，覆盖每个服务的健康检查，使用证书 SAN 对应的地址，并让探活工具信任签发 REST 证书的 CA。以下是宿主机探活示例，假设证书的 IP SAN 包含 `127.0.0.1`。
+
+```sh
+curl --fail --cacert "$NODE_DIR/tls/rest-ca.crt" https://127.0.0.1:8080/healthz
+```

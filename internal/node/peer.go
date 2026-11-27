@@ -117,7 +117,7 @@ func (n *node) acceptMessage(w http.ResponseWriter, r *http.Request, id string, 
 		http.Error(w, "MPC session failed on this node", http.StatusConflict)
 	default:
 		incoming := session.incoming
-		if session.rsaBits != 0 && !session.players.Contains(message.From) {
+		if session.rsaParams.bits != 0 && !session.players.Contains(message.From) {
 			http.Error(w, "unexpected RSA keygen player", http.StatusBadRequest)
 			return
 		}

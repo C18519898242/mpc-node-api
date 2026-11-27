@@ -104,7 +104,7 @@ $env:MPC_NODE_API_KEY_3 = $devKeys.'3'.default
 
 生成凭据时使用至少 32 字节的随机值，再编码为字符串；对该字符串的 UTF-8 字节计算摘要。客户端发送 `Authorization: APIKEY <原始凭据字符串>`。每个节点可以使用不同的凭据，同一组 MPC 请求在参与节点上必须映射到相同的 `applicationID`。轮换凭据时，可以把新旧两把凭据暂时绑定到同一个应用。
 
-开启后，`GET /healthz` 可匿名访问，其余 REST 请求需要认证。凭据缺失或无效返回 `401`。访问另一个应用独有的 `keyID` 与访问当前应用不存在的 `keyID` 一样返回 `404`。不同应用可以使用相同的 `keyID` 或 `sessionId`。同一个应用里的凭据具有相同的操作权限。
+开启后，`GET /healthz` 可匿名访问，其余 REST 请求需要认证。凭据缺失或无效返回 `401`。访问另一个应用独有的 `keyID` 与访问当前应用不存在的 `keyID` 一样返回 `404`。不同应用可以使用相同的 `keyID` 或 `sessionId`。RSA 解密权限通过每把凭据的 `rsaDecryption` 单独配置，默认关闭。
 
 每个节点的密钥、预签名和分片刷新记录都保存在该节点数据目录下的 `node.sqlite`，按表中的 `application_id` 隔离。升级时，已有记录自动归到 `default` 应用。如需继续访问，在每个参与节点配置一把映射到 `default` 的凭据。旧版 `/v1/keygen` 使用独立的分片文件，仍按应用区分文件目录。启用认证时同时更新参与节点的配置和客户端凭据。省略 `restAuth` 会使用本机联调模式。
 
@@ -152,7 +152,7 @@ $env:MPC_NODE_API_KEY_3 = $devKeys.'3'.default
 
 协议对象的 `version` 标识节点间 MPC 消息的兼容版本，由实现统一声明。节点配置文件继续管理本地端口、数据目录和对端节点。Blockdaemon Go SDK 的同名接口使用整数协议编号，直接调用本接口的客户端应按上面的对象结构解析。
 
-## RSA 门限建钥和签名
+## RSA 门限建钥、签名和解密
 
 `POST /rsa/keys?mpc_routing_id=<routingID>` 沿用 ECDSA 建钥的会话头。向选定节点并发发送相同的 `MPC-SessionID`、`MPC-Players` 和请求体。节点须配置 MPC mTLS 和主密码，参与方须是可直接连接的服务端节点。
 
@@ -160,7 +160,9 @@ $env:MPC_NODE_API_KEY_3 = $devKeys.'3'.default
 {"bits":2048,"threshold":1,"keyID":""}
 ```
 
-`bits` 可填 `2048`、`3072`、`4096`。签名门限按 `threshold + 1` 计算，三个节点传 `1` 为 2 签 3，传 `2` 为 3 签 3。建钥时全组选定节点都要参加。每个节点返回 `{"keyID":"..."}`，调用方应等所有节点成功，并核对 `keyID` 一致。
+`bits` 可填 `2048`、`3072`、`4096`。签名和解密所需的分片数均为 `threshold + 1`，三个节点传 `1` 需要 2 份，传 `2` 需要 3 份。建钥时全组选定节点都要参加。每个节点返回 `{"keyID":"..."}`，调用方应等所有节点成功，并核对 `keyID` 一致。
+
+建钥时用 `usage` 指定用途，支持 `"sign"` 和 `"decrypt"`。省略 `usage` 时生成签名密钥，旧版 RSA 密钥也按签名密钥处理。用途写入分片记录并在建钥时由各节点确认，使用已有会话重试时也必须匹配。专用解密密钥的存储格式会被仅支持 RSA 签名的旧版节点拒绝。
 
 生成安全素数耗时随密钥位数变化。节点建钥会话上限为 15 分钟。若全组未完成，使用新会话 ID、新 `keyID` 重试。
 
@@ -168,10 +170,28 @@ $env:MPC_NODE_API_KEY_3 = $devKeys.'3'.default
 
 | 接口 | 请求体 | 响应 |
 | --- | --- | --- |
-| `POST /rsa/keys/{keyID}/publickey` | `{}` 或空请求体 | `publicKey` 为 Base64 编码的 SPKI DER，`players` 为建钥总人数，`requiredSigners` 为最少签名节点数 |
+| `POST /rsa/keys/{keyID}/publickey` | `{}` 或空请求体 | `publicKey` 为 Base64 编码的 SPKI DER，`players` 为建钥总人数，`requiredSigners` 为所需分片数 |
 | `POST /rsa/keys/{keyID}/sign` | `{"messageHash":"<Base64 编码的 32 字节 SHA-256 摘要>"}` | `partialSignature` 为 Base64 编码的 CIRCL 签名分片 |
+| `POST /rsa/keys/{keyID}/decrypt` | `{"ciphertext":"<标准 Base64 编码的 RSA-OAEP 密文>"}` | `partialDecryption` 为 Base64 编码的 JSON 分片数据 |
 
 查询和签名沿用 API Key 应用隔离。签名使用 SHA-256 + PKCS#1 v1.5，各节点独立计算，无需 MPC 会话或节点间通信。用同一个 `keyID` 和摘要调用至少 `requiredSigners` 个不同的分片持有节点，然后在 Go SDK 合并并验签。
+
+创建或使用解密密钥时，客户端必须以 HTTPS 直连各节点的 REST 监听地址，并使用该节点上配置了 `rsaDecryption: true` 的 API Key。为每个节点加入以下配置，证书和私钥路径以节点配置文件为基准。REST 证书的 SAN 必须包含 SDK URL 使用的域名或 IP。
+
+```json
+{
+  "restTLS": {"certFile":"tls/rest.crt","keyFile":"tls/rest.key"},
+  "restAuth": {
+    "apiKeys": [{"applicationID":"default","sha256":"<API Key 的 Base64 SHA-256 摘要>","rsaDecryption":true}]
+  }
+}
+```
+
+启用 `restTLS` 后，整个 REST 监听端口（含 `/healthz`）使用 HTTPS，最低 TLS 版本为 1.2。Windows 联调脚本会按配置选择探活协议，使用内部 CA 时需要让运行脚本的系统信任该 CA。使用 Compose 自定义 TLS 配置时，也需要调整健康检查。见 [Docker 部署文档](docs/deployment.md#为-rest-启用-https)。
+
+使用可信渠道获取的 RSA 公钥以 OAEP 加密，哈希及 MGF1 均为 SHA-256。用同一份密文向至少 `requiredSigners` 个不同的分片持有节点请求解密分片。解密请求无需 MPC 会话头。解码 `partialDecryption` 得到包含 `format`、`keyID`、`publicKey`、`players`、`threshold`、`ciphertext` 和 `share` 的 JSON 对象。`format` 为 `circl-rsa-oaep-sha256-v1`，`threshold` 为所需分片数，`publicKey`、`ciphertext` 和 `share` 为标准 Base64 字段。
+
+分片在 OAEP 校验前返回，并可被代数变换。只向可信合并方授予解密权限，并通过已认证的连接传输分片。节点从本地加密记录读取分片并初始化解密器，初始化耗时可变，授权方可观察请求耗时。合并方使用可信公钥、原始密文和加密时的 OAEP label，核对各分片的元数据和来源后再合并。签名和解密使用独立的 RSA 密钥。
 
 ## ECDSA 建钥接口
 

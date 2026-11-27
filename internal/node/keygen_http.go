@@ -54,10 +54,10 @@ func (n *node) generateKey(w http.ResponseWriter, r *http.Request, prefix, curve
 		return
 	}
 	key := keystore.Key{Algorithm: prefix[:len(prefix)-1], SessionID: sessionID, KeyID: request.KeyID, Threshold: request.Threshold}
-	n.serveStoredKeygen(w, r, key, curve, players, 0, generate)
+	n.serveStoredKeygen(w, r, key, curve, players, rsaKeygenParams{}, generate)
 }
 
-func (n *node) serveStoredKeygen(w http.ResponseWriter, r *http.Request, key keystore.Key, algorithmName string, players party.IDSlice, rsaBits int, generate generateShare) {
+func (n *node) serveStoredKeygen(w http.ResponseWriter, r *http.Request, key keystore.Key, algorithmName string, players party.IDSlice, rsaParams rsaKeygenParams, generate generateShare) {
 	route := key.Algorithm + "." + key.SessionID
 	if key.KeyID == "" {
 		digest := sha256.Sum256([]byte(route))
@@ -68,7 +68,7 @@ func (n *node) serveStoredKeygen(w http.ResponseWriter, r *http.Request, key key
 		return
 	}
 	defer release()
-	session, err := n.beginStoredKeygen(r.Context(), route, key, players, rsaBits, generate)
+	session, err := n.beginStoredKeygen(r.Context(), route, key, players, rsaParams, generate)
 	if errors.Is(err, errTooManySessions) {
 		http.Error(w, "too many concurrent MPC sessions", http.StatusServiceUnavailable)
 		return
@@ -102,12 +102,12 @@ func mpcRoutingID(sessionID string) string {
 	return fmt.Sprintf("%016x", h.Sum64()&0x7fffffffffffffff)
 }
 
-func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Key, players party.IDSlice, rsaBits int, generate generateShare) (*keygenSession, error) {
+func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Key, players party.IDSlice, rsaParams rsaKeygenParams, generate generateShare) (*keygenSession, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.pruneSessionsLocked(time.Now())
 	if session := n.sessions[sessionKey{applicationID(ctx), id}]; session != nil {
-		if session.key == key && session.rsaBits == rsaBits && slices.Equal(session.players, players) {
+		if session.key == key && session.rsaParams == rsaParams && slices.Equal(session.players, players) {
 			return session, nil
 		}
 		return nil, nil
@@ -120,20 +120,20 @@ func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Ke
 		return nil, err
 	}
 	session := &keygenSession{
-		incoming: make(chan *protocol.Message, 32),
-		status:   keygenStatus{State: "running"},
-		done:     make(chan struct{}),
-		key:      key,
-		players:  players,
-		rsaBits:  rsaBits,
+		incoming:  make(chan *protocol.Message, 32),
+		status:    keygenStatus{State: "running"},
+		done:      make(chan struct{}),
+		key:       key,
+		players:   players,
+		rsaParams: rsaParams,
 	}
 	if outcome == keystore.Completed {
-		if rsaBits != 0 {
+		if rsaParams.bits != 0 {
 			data, err := n.keys.Load(ctx, applicationID(ctx), key.Algorithm, key.KeyID)
 			if err != nil {
 				return nil, err
 			}
-			matches := validRSAKeyShare(data, n.config.PartyID, players, key.Threshold, rsaBits)
+			matches := validRSAKeyShare(data, n.config.PartyID, players, key.Threshold, rsaParams)
 			clear(data)
 			if !matches {
 				return nil, nil
@@ -156,7 +156,7 @@ func (n *node) beginStoredKeygen(ctx context.Context, id string, key keystore.Ke
 func (n *node) runStoredKeygen(ctx context.Context, id string, session *keygenSession, generate generateShare) {
 	start := time.Now()
 	timeout := keygenTimeout
-	if session.rsaBits != 0 {
+	if session.rsaParams.bits != 0 {
 		timeout = rsaKeygenTimeout
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)

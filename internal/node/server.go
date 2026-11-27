@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log"
 	"log/slog"
@@ -35,6 +36,15 @@ func httpServer(addr string, handler http.Handler) *http.Server {
 // Serve runs the REST and peer listeners for a single node.
 func Serve(cfg config.Config) error {
 	n := newNode(cfg)
+	var restTLS *tls.Config
+	if cfg.RESTTLS != nil {
+		pair, err := tls.LoadX509KeyPair(cfg.RESTTLS.CertFile, cfg.RESTTLS.KeyFile)
+		if err != nil {
+			n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "rest_tls")
+			return err
+		}
+		restTLS = &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}
+	}
 	if err := n.configureEmergencyRecovery(); err != nil {
 		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "emergency_recovery")
 		return err
@@ -101,7 +111,14 @@ func Serve(cfg config.Config) error {
 	serveErrors := make(chan error, 2)
 	restServer := httpServer(n.config.RESTAddr, n.restHandler())
 	restServer.WriteTimeout = keygenTimeout + restServer.ReadTimeout + 5*time.Second
-	go func() { serveErrors <- restServer.Serve(rest) }()
+	go func() {
+		if restTLS == nil {
+			serveErrors <- restServer.Serve(rest)
+			return
+		}
+		restServer.TLSConfig = restTLS
+		serveErrors <- restServer.ServeTLS(rest, "", "")
+	}()
 	peerServer := httpServer(n.config.MPCAddr, n.peerHandler())
 	go func() {
 		if tlsConfig == nil {

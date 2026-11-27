@@ -23,6 +23,7 @@ type Config struct {
 	MobilePeers                map[party.ID]string      `json:"mobilePeers,omitempty"`
 	LegacyFROSTPlayers         []party.ID               `json:"legacyFrostPlayers,omitempty"`
 	MPCTLS                     *MPCTLSConfig            `json:"mpcTLS,omitempty"`
+	RESTTLS                    *RESTTLSConfig           `json:"restTLS,omitempty"`
 	RESTAuth                   *RESTAuthConfig          `json:"restAuth,omitempty"`
 	EncryptorMasterPasswordEnv string                   `json:"encryptorMasterPasswordEnv,omitempty"`
 	KeyTransfer                *KeyTransferConfig       `json:"keyTransfer,omitempty"`
@@ -53,10 +54,16 @@ type RESTAuthConfig struct {
 type APIKey struct {
 	ApplicationID string `json:"applicationID"`
 	SHA256        string `json:"sha256"`
+	RSADecryption bool   `json:"rsaDecryption,omitempty"`
 }
 
 type MPCTLSConfig struct {
 	CAFile   string `json:"caFile"`
+	CertFile string `json:"certFile"`
+	KeyFile  string `json:"keyFile"`
+}
+
+type RESTTLSConfig struct {
 	CertFile string `json:"certFile"`
 	KeyFile  string `json:"keyFile"`
 }
@@ -130,6 +137,22 @@ func load(path string, embedded bool) (Config, error) {
 			}
 		}
 	}
+	if cfg.RESTTLS != nil {
+		for _, file := range []*string{&cfg.RESTTLS.CertFile, &cfg.RESTTLS.KeyFile} {
+			if *file == "" {
+				return cfg, fmt.Errorf("%s: restTLS requires certFile and keyFile", path)
+			}
+			if !filepath.IsAbs(*file) {
+				*file = filepath.Join(filepath.Dir(path), *file)
+			}
+		}
+	} else if cfg.RESTAuth != nil {
+		for _, key := range cfg.RESTAuth.APIKeys {
+			if key.RSADecryption {
+				return cfg, fmt.Errorf("%s: rsaDecryption API keys require restTLS", path)
+			}
+		}
+	}
 	if !filepath.IsAbs(cfg.DataDir) {
 		cfg.DataDir = filepath.Join(filepath.Dir(path), cfg.DataDir)
 	}
@@ -142,7 +165,7 @@ func load(path string, embedded bool) (Config, error) {
 
 // ValidateEmbedded checks JSON supplied directly by an embedding application.
 func ValidateEmbedded(cfg Config) error {
-	if !validPartyID(cfg.PartyID) || cfg.DataDir == "" || len(cfg.Peers) < 1 || len(cfg.MobilePeers) > 0 || cfg.MPCTLS == nil || cfg.RESTAddr != "" || cfg.MPCAddr != "" || cfg.RESTAuth != nil || cfg.AllowNonLoopbackREST {
+	if !validPartyID(cfg.PartyID) || cfg.DataDir == "" || len(cfg.Peers) < 1 || len(cfg.MobilePeers) > 0 || cfg.MPCTLS == nil || cfg.RESTAddr != "" || cfg.MPCAddr != "" || cfg.RESTAuth != nil || cfg.RESTTLS != nil || cfg.AllowNonLoopbackREST {
 		return fmt.Errorf("embedded node requires TLS, outbound peers, dataDir and no listeners or REST auth")
 	}
 	seen := map[string]bool{}

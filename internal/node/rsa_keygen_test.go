@@ -3,6 +3,7 @@ package node
 import (
 	"bytes"
 	"crypto"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -12,10 +13,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	thresholdrsa "github.com/C18519898242/circl/tss/rsa"
 	"github.com/C18519898242/mpc-node-api/internal/config"
 	"github.com/C18519898242/mpc-node-api/internal/keystore"
 	"github.com/C18519898242/mpc-node-api/internal/peertls"
-	thresholdrsa "github.com/cloudflare/circl/tss/rsa"
 	"github.com/taurusgroup/multi-party-sig/pkg/party"
 )
 
@@ -29,7 +30,7 @@ func TestRSAKeygenRequiresProtectedNodes(t *testing.T) {
 
 func TestRSAOperationsRequireProtectedNodes(t *testing.T) {
 	handler := newNode(config.Config{}).restHandler()
-	for _, operation := range []string{"publickey", "sign"} {
+	for _, operation := range []string{"publickey", "sign", "decrypt"} {
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/rsa/keys/test-rsa/"+operation, nil))
 		if w.Code != http.StatusForbidden {
@@ -38,7 +39,8 @@ func TestRSAOperationsRequireProtectedNodes(t *testing.T) {
 	}
 }
 
-func TestRSAKeygenDistributesDistinctShares(t *testing.T) {
+func rsaTestNodes(t *testing.T, auth *config.RESTAuthConfig) (party.IDSlice, [3]*node) {
+	t.Helper()
 	players := party.IDSlice{"1", "2", "3"}
 	certDir := filepath.Join(t.TempDir(), "certs")
 	if err := peertls.GenerateDevDirectory(certDir, players); err != nil {
@@ -52,7 +54,7 @@ func TestRSAKeygenDistributesDistinctShares(t *testing.T) {
 	}
 	for i, id := range players {
 		folder := filepath.Join(certDir, "node-"+string(id))
-		cfg := config.Config{PartyID: id, Peers: map[party.ID]string{}, MPCTLS: &config.MPCTLSConfig{
+		cfg := config.Config{PartyID: id, Peers: map[party.ID]string{}, RESTAuth: auth, MPCTLS: &config.MPCTLSConfig{
 			CAFile: filepath.Join(certDir, "ca.crt"), CertFile: filepath.Join(folder, "node.crt"), KeyFile: filepath.Join(folder, "node.key"),
 		}}
 		for j, peer := range players {
@@ -61,6 +63,9 @@ func TestRSAKeygenDistributesDistinctShares(t *testing.T) {
 			}
 		}
 		n := newNode(cfg)
+		if err := n.configureRESTAuth(); err != nil {
+			t.Fatal(err)
+		}
 		store, err := keystore.OpenNodeSQLite(t.TempDir(), string(id))
 		if err != nil {
 			t.Fatal(err)
@@ -85,6 +90,11 @@ func TestRSAKeygenDistributesDistinctShares(t *testing.T) {
 		servers[i].StartTLS()
 		nodes[i] = n
 	}
+	return players, nodes
+}
+
+func TestRSAKeygenDistributesDistinctShares(t *testing.T) {
+	players, nodes := rsaTestNodes(t, nil)
 	const session, keyID = "rsa-fixture", "fixture-rsa"
 	request := func(i, bits int) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(map[string]any{"threshold": 1, "bits": bits, "keyID": keyID})
@@ -127,12 +137,22 @@ func TestRSAKeygenDistributesDistinctShares(t *testing.T) {
 			t.Fatal(err)
 		}
 		var stored struct {
-			PublicKey []byte
-			Share     []byte
+			Players   party.IDSlice `json:"players"`
+			PublicKey []byte        `json:"publicKey"`
+			Share     []byte        `json:"share"`
 		}
 		var share thresholdrsa.KeyShare
 		if json.Unmarshal(raw, &stored) != nil || len(stored.PublicKey) == 0 || share.UnmarshalBinary(stored.Share) != nil {
 			t.Fatalf("invalid or duplicate RSA share on node %d", i+1)
+		}
+		legacy, err := json.Marshal(stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := decodeStoredRSAKeyShare(legacy, players[i])
+		clear(legacy)
+		if err != nil || decoded.usage != rsaUsageSign {
+			t.Fatalf("legacy RSA key share was not recognized as a signing share on node %d", i+1)
 		}
 		clear(raw)
 		fingerprint := sha256.Sum256(stored.Share)
@@ -204,5 +224,22 @@ func TestRSAKeygenDistributesDistinctShares(t *testing.T) {
 	signature, err := thresholdrsa.CombineSignShares(key, 3, 2, partials[:], padded)
 	if err != nil || rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], signature) != nil {
 		t.Fatal("stored RSA shares did not produce a valid signature")
+	}
+	n := nodes[0]
+	n.config.RESTAuth = rsaTestRESTAuth()
+	if err := n.configureRESTAuth(); err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, key, message, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decryptRequest, _ := json.Marshal(map[string][]byte{"ciphertext": ciphertext})
+	r := httptest.NewRequest(http.MethodPost, "https://node.example/rsa/keys/"+keyID+"/decrypt", bytes.NewReader(decryptRequest))
+	r.Header.Set("Authorization", "APIKEY "+rsaDecryptToken)
+	w := httptest.NewRecorder()
+	n.restHandler().ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("decryption with signing key returned HTTP %d", w.Code)
 	}
 }
