@@ -3,6 +3,7 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -121,6 +122,10 @@ func (n *node) acceptMessage(w http.ResponseWriter, r *http.Request, id string, 
 			http.Error(w, "unexpected RSA keygen player", http.StatusBadRequest)
 			return
 		}
+		if strings.HasPrefix(batchID, rsaPSSSignPrefix) && !validRSAPSSPeerMessage(n.config.PartyID, session.players, message) {
+			http.Error(w, "unexpected RSA-PSS signing message", http.StatusBadRequest)
+			return
+		}
 		if wallet {
 			if !session.players.Contains(message.From) || n.config.Peers[message.From] == "" {
 				http.Error(w, "unexpected wallet player", http.StatusBadRequest)
@@ -155,6 +160,21 @@ func (n *node) acceptMessage(w http.ResponseWriter, r *http.Request, id string, 
 	}
 }
 
+func validRSAPSSPeerMessage(self party.ID, players party.IDSlice, message *protocol.Message) bool {
+	if len(players) < 2 || !players.Contains(self) || !players.Contains(message.From) || message.From == self || len(message.SSID) != sha256.Size {
+		return false
+	}
+	dealer := players[0]
+	if self == dealer {
+		return message.Protocol == rsaPSSReadyMessage && len(message.Data) == 0
+	}
+	if message.From != dealer {
+		return false
+	}
+	return (message.Protocol == rsaPSSSaltMessage && len(message.Data) == sha256.Size) ||
+		(message.Protocol == rsaPSSAbortMessage && len(message.Data) == 0)
+}
+
 func validPeerSessionID(id string) bool {
 	if _, _, ok := splitWalletRoute(id); ok {
 		return true
@@ -185,6 +205,9 @@ func validPeerSessionID(id string) bool {
 		return memorySessionPattern.MatchString(sessionID)
 	}
 	if sessionID, ok := strings.CutPrefix(id, rsaSessionPrefix); ok {
+		return memorySessionPattern.MatchString(sessionID)
+	}
+	if sessionID, ok := strings.CutPrefix(id, rsaPSSSignPrefix); ok {
 		return memorySessionPattern.MatchString(sessionID)
 	}
 	return sessionIDPattern.MatchString(id)

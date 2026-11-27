@@ -59,7 +59,7 @@ func (n *node) serveSignature(w http.ResponseWriter, r *http.Request, id, keyID 
 		http.Error(w, "could not encode signing parameters", http.StatusInternalServerError)
 		return
 	}
-	session, err := n.beginSign(r.Context(), id, sha256.Sum256(binding), func(ctx context.Context, session *keygenSession) ([]byte, error) {
+	session, err := n.beginSignWithPlayers(r.Context(), id, signers, sha256.Sum256(binding), func(ctx context.Context, session *keygenSession) ([]byte, error) {
 		return run(ctx, session, partial)
 	})
 	if errors.Is(err, errTooManySessions) {
@@ -97,6 +97,10 @@ func (n *node) serveSignature(w http.ResponseWriter, r *http.Request, id, keyID 
 }
 
 func (n *node) beginSign(ctx context.Context, id string, binding [32]byte, run signOperation) (*keygenSession, error) {
+	return n.beginSignWithPlayers(ctx, id, nil, binding, run)
+}
+
+func (n *node) beginSignWithPlayers(ctx context.Context, id string, players party.IDSlice, binding [32]byte, run signOperation) (*keygenSession, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.pruneSessionsLocked(time.Now())
@@ -120,6 +124,7 @@ func (n *node) beginSign(ctx context.Context, id string, binding [32]byte, run s
 		status:      keygenStatus{State: "running"},
 		done:        make(chan struct{}),
 		signBinding: binding,
+		players:     slices.Clone(players),
 	}
 	n.sessions[sessionKey{applicationID(ctx), id}] = session
 	go n.runSign(n.operationContext(ctx), id, session, run)

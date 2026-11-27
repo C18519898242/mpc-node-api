@@ -172,9 +172,12 @@ $env:MPC_NODE_API_KEY_3 = $devKeys.'3'.default
 | --- | --- | --- |
 | `POST /rsa/keys/{keyID}/publickey` | `{}` 或空请求体 | `publicKey` 为 Base64 编码的 SPKI DER，`players` 为建钥总人数，`requiredSigners` 为所需分片数 |
 | `POST /rsa/keys/{keyID}/sign` | `{"messageHash":"<Base64 编码的 32 字节 SHA-256 摘要>"}` | `partialSignature` 为 Base64 编码的 CIRCL 签名分片 |
+| `POST /rsa/keys/{keyID}/signpss` | `{"hash":"SHA256","messageHash":"<Base64 编码的 32 字节 SHA-256 摘要>"}` | `partialSignature` 为 Base64 编码的 JSON 分片封装数据 |
 | `POST /rsa/keys/{keyID}/decrypt` | `{"ciphertext":"<标准 Base64 编码的 RSA-OAEP 密文>"}` | `partialDecryption` 为 Base64 编码的 JSON 分片数据 |
 
-查询和签名沿用 API Key 应用隔离。签名使用 SHA-256 + PKCS#1 v1.5，各节点独立计算，无需 MPC 会话或节点间通信。用同一个 `keyID` 和摘要调用至少 `requiredSigners` 个不同的分片持有节点，然后在 Go SDK 合并并验签。
+查询和签名沿用 API Key 应用隔离，且只允许 `usage: "sign"`（或旧版）RSA 密钥。PKCS#1 v1.5 签名（`POST /rsa/keys/{keyID}/sign`）使用 SHA-256，各节点独立计算，无需 MPC 会话或节点间通信；用同一个 `keyID` 和摘要调用至少 `requiredSigners` 个不同的分片持有节点，然后在 Go SDK 合并并验签。
+
+RSA-PSS 门限签名（`POST /rsa/keys/{keyID}/signpss?mpc_routing_id=<routingID>`）必须通过 `restTLS`（HTTPS）并携带配置了 `restAuth` 的有效 API Key 调用，沿用在线签名的 `MPC-SessionID`、`MPC-RoutingID` 和 `MPC-Players` 会话头，只支持 `hash: "SHA256"` 与 32 字节摘要（区别于 Builder Vault 的数值型 `hash` 与请求体 `players` 字段，未定义字段会被拒绝）。以 2-of-3（建钥时 `threshold=1`）为例，调用方任选至少 2 个持有分片的节点（如节点 `1` 和 `3`）并发发起相同会话请求；按 `partyId` 排序的第一个参与节点生成每次签名专用的 32 字节随机盐并通过 MPC mTLS 通道分发，各节点校验会话参数一致后使用同一份盐和 CIRCL `PSSPadder` 签名。返回的 `partialSignature` 解码为包含 `format`（`circl-rsa-pss-sha256-v1`）、`sessionID`、`keyID`、`hash`、`publicKey`、`players`、`threshold`、`playerIndex`、`signers`、`digest`、`salt` 和 `share` 的 JSON 对象。同一会话重放若参数变化会返回 `409`。
 
 创建或使用解密密钥时，客户端必须以 HTTPS 直连各节点的 REST 监听地址，并使用该节点上配置了 `rsaDecryption: true` 的 API Key。为每个节点加入以下配置，证书和私钥路径以节点配置文件为基准。REST 证书的 SAN 必须包含 SDK URL 使用的域名或 IP。
 

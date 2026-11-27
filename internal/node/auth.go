@@ -74,6 +74,11 @@ func rsaDecryptionAllowed(r *http.Request) bool {
 	return r.TLS != nil && allowed
 }
 
+func (n *node) rsaPSSAllowed(r *http.Request) bool {
+	app, ok := r.Context().Value(applicationContextKey{}).(string)
+	return n.config.RESTAuth != nil && r.TLS != nil && ok && app != ""
+}
+
 func (n *node) requireAPIKey(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
