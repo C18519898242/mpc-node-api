@@ -85,7 +85,11 @@ func writeStatus(w http.ResponseWriter, code int, status keygenStatus) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, value any, limit int64) error {
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
+	return decodeSingleJSON(http.MaxBytesReader(w, r.Body, limit), value)
+}
+
+func decodeSingleJSON(source io.Reader, value any) error {
+	decoder := json.NewDecoder(source)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(value); err != nil {
 		return err

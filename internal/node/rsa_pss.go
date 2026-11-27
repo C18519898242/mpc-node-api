@@ -43,7 +43,7 @@ type rsaPSSEnvelope struct {
 }
 
 func (n *node) signRSAPSS(w http.ResponseWriter, r *http.Request) {
-	if !n.rsaEnabled() || !n.rsaPSSAllowed(r) {
+	if !n.rsaEnabled() || !n.authenticatedRESTTLS(r) {
 		http.Error(w, "RSA-PSS signing requires MPC mTLS, encrypted storage, an API key and HTTPS", http.StatusForbidden)
 		return
 	}

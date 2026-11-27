@@ -31,13 +31,14 @@ type keyTransferPayload struct {
 }
 
 type keyTransferParameters struct {
-	Route     string
-	KeyID     string
-	SourceID  string
-	Threshold int
-	Players   party.IDSlice
-	Path      []uint32
-	ExportID  []byte
+	Route         string
+	KeyID         string
+	SourceID      string
+	Threshold     int
+	Players       party.IDSlice
+	Path          []uint32
+	ExportID      []byte
+	ImportBinding []byte `json:",omitempty"`
 	// Imports reserve their key only after admission, while n.mu is held.
 	reserve func() bool
 }
@@ -45,6 +46,9 @@ type keyTransferParameters struct {
 func parseKeyTransferRoute(route string) (string, string, bool) {
 	prefix, sid, ok := strings.Cut(route, ".")
 	algorithm, operation, found := strings.Cut(prefix, "-")
+	if algorithm == "rsa" {
+		return algorithm, operation, ok && operation == "import" && memorySessionPattern.MatchString(sid)
+	}
 	return algorithm, operation, ok && found && (algorithm == "ecdsa" || algorithm == "frost") &&
 		(operation == "export" || operation == "import" || operation == "recovery") && memorySessionPattern.MatchString(sid)
 }

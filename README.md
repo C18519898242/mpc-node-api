@@ -173,6 +173,7 @@ $env:MPC_NODE_API_KEY_3 = $devKeys.'3'.default
 | `POST /rsa/keys/{keyID}/publickey` | `{}` 或空请求体 | `publicKey` 为 Base64 编码的 SPKI DER，`players` 为建钥总人数，`requiredSigners` 为所需分片数 |
 | `POST /rsa/keys/{keyID}/sign` | `{"messageHash":"<Base64 编码的 32 字节 SHA-256 摘要>"}` | `partialSignature` 为 Base64 编码的 CIRCL 签名分片 |
 | `POST /rsa/keys/{keyID}/signpss` | `{"hash":"SHA256","messageHash":"<Base64 编码的 32 字节 SHA-256 摘要>"}` | `partialSignature` 为 Base64 编码的 JSON 分片封装数据 |
+| `POST /rsa/keys/importkey` | `{"keyID":"<可选>","wrappedKeyShare":"<Base64 编码的加密分片封装>"}` | `{"keyID":"..."}` |
 | `POST /rsa/keys/{keyID}/decrypt` | `{"ciphertext":"<标准 Base64 编码的 RSA-OAEP 密文>"}` | `partialDecryption` 为 Base64 编码的 JSON 分片数据 |
 
 查询和签名沿用 API Key 应用隔离，且只允许 `usage: "sign"`（或旧版）RSA 密钥。PKCS#1 v1.5 签名（`POST /rsa/keys/{keyID}/sign`）使用 SHA-256，各节点独立计算，无需 MPC 会话或节点间通信；用同一个 `keyID` 和摘要调用至少 `requiredSigners` 个不同的分片持有节点，然后在 Go SDK 合并并验签。
@@ -195,6 +196,14 @@ RSA-PSS 门限签名（`POST /rsa/keys/{keyID}/signpss?mpc_routing_id=<routingID
 使用可信渠道获取的 RSA 公钥以 OAEP 加密，哈希及 MGF1 均为 SHA-256。用同一份密文向至少 `requiredSigners` 个不同的分片持有节点请求解密分片。解密请求无需 MPC 会话头。解码 `partialDecryption` 得到包含 `format`、`keyID`、`publicKey`、`players`、`threshold`、`ciphertext` 和 `share` 的 JSON 对象。`format` 为 `circl-rsa-oaep-sha256-v1`，`threshold` 为所需分片数，`publicKey`、`ciphertext` 和 `share` 为标准 Base64 字段。
 
 分片在 OAEP 校验前返回，并可被代数变换。只向可信合并方授予解密权限，并通过已认证的连接传输分片。节点从本地加密记录读取分片并初始化解密器，初始化耗时可变，授权方可观察请求耗时。合并方使用可信公钥、原始密文和加密时的 OAEP label，核对各分片的元数据和来源后再合并。签名和解密使用独立的 RSA 密钥。
+
+### 导入外部 RSA 签名密钥
+
+`POST /rsa/keys/importkey?mpc_routing_id=<routingID>` 要求 MPC mTLS、加密存储、REST HTTPS、API Key 和 `keyTransfer.wrappingPrivateKeyFile`。各节点使用独立的包装密钥。调用方使用 Go SDK 在离线环境拆分原始私钥，各节点只接收并解包自己的分片。
+
+向离线分片指定的所有节点并发提交同一组 MPC 会话头和同一个 `keyID`，每台节点的 `wrappedKeyShare` 分别加密给它自己。分片决定门限，三节点传入 `threshold=1` 生成的分片时，签名需要两台节点参与。留空 `keyID` 时，节点从会话 ID 导出共同 ID。参与节点核对分片批次、公钥和门限，并在落库前用门限签名验证提交的分片能用于该公钥。收齐全部成功响应后再使用密钥。若部分节点失败，用新会话和新 ID 重试整组。
+
+导入使用本项目 CIRCL 分片和包装格式，接受由可信离线分片方准备的双安全素数 RSA 密钥，模数为 2048、3072 或 4096 位，公钥指数为 65537。导入后的密钥用于 PKCS#1 v1.5 和 PSS 签名。
 
 ## ECDSA 建钥接口
 
