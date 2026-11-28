@@ -47,7 +47,7 @@ func parseKeyTransferRoute(route string) (string, string, bool) {
 	prefix, sid, ok := strings.Cut(route, ".")
 	algorithm, operation, found := strings.Cut(prefix, "-")
 	if algorithm == "rsa" {
-		return algorithm, operation, ok && operation == "import" && memorySessionPattern.MatchString(sid)
+		return algorithm, operation, ok && (operation == "import" || operation == "export") && memorySessionPattern.MatchString(sid)
 	}
 	return algorithm, operation, ok && found && (algorithm == "ecdsa" || algorithm == "frost") &&
 		(operation == "export" || operation == "import" || operation == "recovery") && memorySessionPattern.MatchString(sid)

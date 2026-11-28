@@ -175,6 +175,7 @@ $env:MPC_NODE_API_KEY_3 = $devKeys.'3'.default
 | `POST /rsa/keys/{keyID}/sign` | `{"messageHash":"<Base64 编码的 32 字节 SHA-256 摘要>"}` | `partialSignature` 为 Base64 编码的 CIRCL 签名分片 |
 | `POST /rsa/keys/{keyID}/signpss` | `{"hash":5,"messageHash":"<Base64 编码的 32 字节 SHA-256 摘要>","players":null}` | `partialSignature` 为 Base64 编码的 CIRCL JSON 分片 |
 | `POST /rsa/keys/importkey` | `{"keyID":"<可选>","wrappedKeyShare":"<Base64 编码的加密分片封装>"}` | `{"keyID":"..."}` |
+| `POST /rsa/keys/{keyID}/exportkey` | `{"wrappingKey":"<目标节点包装公钥的 Base64 SPKI DER>"}` | `{"wrappedKeyShare":"<可直接用于 ImportKey 的 Base64 加密分片>","publicKey":"<Base64 SPKI DER 公钥>"}` |
 | `POST /rsa/keys/{keyID}/decrypt` | `{"ciphertext":"<标准 Base64 编码的 RSA-OAEP 密文>"}` | `partialDecryption` 为 Base64 编码的 JSON 分片数据 |
 
 公钥查询和签名沿用 API Key 应用隔离。签名使用 `usage: "sign"` 或旧版 RSA 密钥。PKCS#1 v1.5 签名（`POST /rsa/keys/{keyID}/sign`）使用 SHA-256，各节点独立计算，无需 MPC 会话或节点间通信。用同一个 `keyID` 和摘要调用至少 `requiredSigners` 个不同的分片持有节点，然后在 Go SDK 合并并验签。
@@ -207,6 +208,16 @@ RSA-PSS 门限签名（`POST /rsa/keys/{keyID}/signpss?mpc_routing_id=<routingID
 向离线分片指定的所有节点并发提交同一组 MPC 会话头和同一个 `keyID`，每台节点的 `wrappedKeyShare` 分别加密给它自己。分片决定门限，三节点传入 `threshold=1` 生成的分片时，签名需要两台节点参与。留空 `keyID` 时，节点从会话 ID 导出共同 ID。参与节点核对分片批次、公钥和门限，并在落库前用门限签名验证提交的分片能用于该公钥。收齐全部成功响应后再使用密钥。若部分节点失败，用新会话和新 ID 重试整组。
 
 导入使用本项目 CIRCL 分片和包装格式，接受由可信离线分片方准备的双安全素数 RSA 密钥，模数为 2048、3072 或 4096 位，公钥指数为 65537。导入后的密钥用于 PKCS#1 v1.5 和 PSS 签名。
+
+### 导出和迁移 RSA 签名密钥
+
+`POST /rsa/keys/{keyID}/exportkey?mpc_routing_id=<routingID>` 支持在两套 `mpc-node-api` 集群之间加密迁移 RSA 签名密钥，保留原 RSA 公钥、节点 ID、分片编号和签名门限，全过程不重建完整私钥。
+
+- 节点须启用 MPC mTLS、加密存储、REST HTTPS、API Key，且配置 `keyTransfer.exportEnabled: true` 并在 `keyTransfer.exportWrappingKeys` 中显式列入对应目标节点的 SPKI DER 包装公钥。导出默认关闭。
+- 沿用 `MPC-SessionID`、`MPC-RoutingID` 和 1 起始 `MPC-Players` 会话头；请求体为 `{"wrappingKey":"<Base64 SPKI DER>"}`。会话参与者必须与原密钥分片持有者列表一致，各源节点可分别接收对应目标节点不同的包装公钥。
+- 仅允许导出当前应用下 `usage: "sign"`（或旧版签名）的 RSA 密钥；访问其他应用的 `keyID` 返回 `404`。
+- 同一次导出的所有源节点会在内部确认会话参数一致，并生成相同的 `splitID`（绑定源应用、源 `keyID`、导出会话、公钥、参与者和门限），随后用现有 `circl-rsa-sign-import-v1` 和 RSA-OAEP + AES-256-GCM 封装各自的分片，返回 `{"wrappedKeyShare":"...","publicKey":"..."}`。
+- 收到响应后，使用新的导入会话将各节点返回的 `wrappedKeyShare` 原样提交到对应目标节点的 `POST /rsa/keys/importkey`，导入方会执行原有的导入证明与验签。
 
 ## ECDSA 建钥接口
 
