@@ -13,7 +13,7 @@
 - `main.go` 解析启动参数并选择运行模式。
 - `internal/config` 加载节点 JSON 配置，校验监听地址并解析数据目录。
 - `internal/node` 运行单节点，处理 REST、节点通信和 CMP / FROST 建钥。
-- `internal/keystore` 管理 SQLite 中的建钥记录和分片。
+- `internal/keystore` 管理 SQLite 或 MySQL 中的建钥记录和分片。
 - `configs` 和 `scripts` 提供三节点配置、启动命令和 HTTP 冒烟测试。
 
 ## Docker Desktop 三节点联调
@@ -83,6 +83,45 @@ $env:MPC_NODE_API_KEY_3 = $devKeys.'3'.default
 | 3 | 8083 | 9083 | `data/node-3` |
 
 单节点可用 `go run . -config configs/node-1.json` 启动。配置中的相对数据目录以配置文件所在目录为基准。
+
+## MySQL 存储配置
+
+默认使用每个节点独立的 SQLite 文件（`dataDir/node.sqlite`）；移动端（嵌入式节点）固定使用本地 SQLite，不支持配置 MySQL。服务端节点可在配置中加入 `database` 段切换为 MySQL（已验证 MySQL 8.4.13）：
+
+```json
+{
+  "encryptorMasterPasswordEnv": "MPC_NODE_1_MASTER_PASSWORD",
+  "database": {
+    "driver": "mysql",
+    "addr": "127.0.0.1:3306",
+    "user": "root",
+    "passwordEnv": "MPC_NODE_MYSQL_PASSWORD",
+    "dbName": "mpc_node_1",
+    "tlsMode": "preferred"
+  }
+}
+```
+
+- **每节点独立库与精确排序**：不同 `partyId` 的节点必须连接各自独立的数据库（如 `mpc_node_1`、`mpc_node_2`、`mpc_node_3`）。启动时节点会校验 `autocommit=1`，使用 `utf8mb4_0900_bin`（区分大小写且区分尾随空格）建表并自动升级旧版 `utf8mb4_bin` 表，同时校验 `node_owner` 防止多节点共用一库。
+- **TLS 与远程部署**：远程 TCP 连接默认使用 `tlsMode: "true"` 验证数据库服务器证书，也可通过 `caFile` 指定自定义 CA（两者均强制关闭明文回退 `AllowFallbackToPlaintext`）。本机联调可显式设置 `"tlsMode": "preferred"`，注意 `preferred` 在服务端未开启 TLS 时允许回退为明文连接，仅限本地调试。
+- **强制主密钥（MK）加密**：使用 MySQL 时**必须**配置 `encryptorMasterPasswordEnv`（缺少密码会在监听 REST/MPC 端口前拒绝启动），且从首次写入起即写入加密分片。若目标 MySQL 库中已存在 `share_format = 0` 的明文私钥分片、reshare 候选或预签名，节点会拒绝启动，以免通过 `UPDATE` 回填把历史明文写入 binlog；清理或迁移时需同时处理历史 binlog、备份与从库。
+- **从 SQLite 切换至 MySQL**：不要直接将 SQLite 明文数据灌入 MySQL。请先为目标 MySQL 集群配置好 `encryptorMasterPasswordEnv` 与全新的空库并启动，再通过 API 迁移密钥（ECDSA / FROST / RSA 使用 `exportkey` + `importkey`，或单节点使用 `exportkeyshare` + `importkeyshare`；旧数据另有离线恢复与刷新路径）。
+- **凭据来源**：使用 `passwordEnv`（配合 `addr`、`user`、`dbName`）或 `dsnEnv` 从环境变量读取密码 / DSN，不将数据库口令写入配置文件。
+- **本地联调示例**（使用 `configs/mysql/node-*.json` 连接本机 `127.0.0.1:3306` 的 MySQL）：
+
+```powershell
+docker exec mysql-local mysql -uroot -pP@ss0wrd -e "CREATE DATABASE IF NOT EXISTS mpc_node_1; CREATE DATABASE IF NOT EXISTS mpc_node_2; CREATE DATABASE IF NOT EXISTS mpc_node_3;"
+$env:MPC_NODE_MYSQL_PASSWORD = "P@ss0wrd"
+. .\certs\mpc-master-passwords.ps1
+.\scripts\dev-up.ps1 -Configs configs/mysql/node-1.json,configs/mysql/node-2.json,configs/mysql/node-3.json
+```
+
+运行包含 MySQL 8.4.13 实库验证的测试：
+
+```powershell
+$env:MPC_TEST_MYSQL_DSN = "root:P@ss0wrd@tcp(127.0.0.1:3306)/"
+go test ./internal/config ./internal/keystore ./internal/node
+```
 
 默认配置下，MPC 端口使用 TLS 1.3 双向认证，REST 端口使用回环 HTTP。`-Smoke` 调用旧的 `/v1/keygen`，分片以 CMP 二进制文件写入各节点的数据目录。只使用测试密钥。 [MPC mTLS 使用说明](docs/mtls/README.md)
 

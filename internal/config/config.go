@@ -18,7 +18,8 @@ type Config struct {
 	RESTAddr                   string                   `json:"restAddr"`
 	AllowNonLoopbackREST       bool                     `json:"allowNonLoopbackREST,omitempty"`
 	MPCAddr                    string                   `json:"mpcAddr"`
-	DataDir                    string                   `json:"dataDir"`
+	DataDir                    string                   `json:"dataDir,omitempty"`
+	Database                   *DatabaseConfig          `json:"database,omitempty"`
 	Peers                      map[party.ID]string      `json:"peers"`
 	MobilePeers                map[party.ID]string      `json:"mobilePeers,omitempty"`
 	LegacyFROSTPlayers         []party.ID               `json:"legacyFrostPlayers,omitempty"`
@@ -29,6 +30,17 @@ type Config struct {
 	KeyTransfer                *KeyTransferConfig       `json:"keyTransfer,omitempty"`
 	EmergencyRecovery          *EmergencyRecoveryConfig `json:"emergencyRecovery,omitempty"`
 	WalletBackup               *WalletBackupConfig      `json:"walletBackup,omitempty"`
+}
+
+type DatabaseConfig struct {
+	Driver      string `json:"driver,omitempty"`
+	DSNEnv      string `json:"dsnEnv,omitempty"`
+	Addr        string `json:"addr,omitempty"`
+	User        string `json:"user,omitempty"`
+	PasswordEnv string `json:"passwordEnv,omitempty"`
+	DBName      string `json:"dbName,omitempty"`
+	TLSMode     string `json:"tlsMode,omitempty"`
+	CAFile      string `json:"caFile,omitempty"`
 }
 
 type WalletBackupConfig struct {
@@ -85,8 +97,11 @@ func load(path string, embedded bool) (Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("decode %s: %w", path, err)
 	}
-	if !validPartyID(cfg.PartyID) || cfg.DataDir == "" || len(cfg.Peers)+len(cfg.MobilePeers) == 0 {
-		return cfg, fmt.Errorf("%s: expected partyId, dataDir and at least one peer", path)
+	if !validPartyID(cfg.PartyID) || len(cfg.Peers)+len(cfg.MobilePeers) == 0 {
+		return cfg, fmt.Errorf("%s: expected partyId and at least one peer", path)
+	}
+	if err := validateDatabaseConfig(path, &cfg, embedded); err != nil {
+		return cfg, err
 	}
 
 	addrs := []string{}
@@ -153,20 +168,85 @@ func load(path string, embedded bool) (Config, error) {
 			}
 		}
 	}
-	if !filepath.IsAbs(cfg.DataDir) {
-		cfg.DataDir = filepath.Join(filepath.Dir(path), cfg.DataDir)
+	if cfg.DataDir != "" {
+		if !filepath.IsAbs(cfg.DataDir) {
+			cfg.DataDir = filepath.Join(filepath.Dir(path), cfg.DataDir)
+		}
+		if err := os.MkdirAll(cfg.DataDir, 0700); err != nil {
+			return cfg, err
+		}
 	}
 	if cfg.KeyTransfer != nil && cfg.KeyTransfer.WrappingPrivateKeyFile != "" &&
 		!filepath.IsAbs(cfg.KeyTransfer.WrappingPrivateKeyFile) {
 		cfg.KeyTransfer.WrappingPrivateKeyFile = filepath.Join(filepath.Dir(path), cfg.KeyTransfer.WrappingPrivateKeyFile)
 	}
-	return cfg, os.MkdirAll(cfg.DataDir, 0700)
+	return cfg, nil
+}
+
+var mysqlDBNamePattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,64}$`)
+
+func validateDatabaseConfig(configPath string, cfg *Config, embedded bool) error {
+	db := cfg.Database
+	driver := ""
+	if db != nil {
+		driver = strings.ToLower(strings.TrimSpace(db.Driver))
+	}
+	if driver == "" || driver == "sqlite" {
+		if cfg.DataDir == "" {
+			return fmt.Errorf("%s: expected dataDir for sqlite storage", configPath)
+		}
+		if db != nil && (db.DSNEnv != "" || db.Addr != "" || db.User != "" || db.PasswordEnv != "" || db.DBName != "" || db.TLSMode != "" || db.CAFile != "") {
+			return fmt.Errorf("%s: mysql database fields require driver \"mysql\"", configPath)
+		}
+		return nil
+	}
+	if driver != "mysql" {
+		return fmt.Errorf("%s: unsupported database driver %q", configPath, db.Driver)
+	}
+	if embedded {
+		return fmt.Errorf("%s: embedded node does not support mysql storage", configPath)
+	}
+	if cfg.EncryptorMasterPasswordEnv == "" {
+		return fmt.Errorf("%s: mysql storage requires encryptorMasterPasswordEnv", configPath)
+	}
+	db.Driver = "mysql"
+	hasDSN := db.DSNEnv != ""
+	hasFields := db.Addr != "" || db.User != "" || db.PasswordEnv != "" || db.DBName != ""
+	if hasDSN == hasFields {
+		return fmt.Errorf("%s: mysql requires either dsnEnv or addr, user and dbName", configPath)
+	}
+	if !hasDSN {
+		addr, ok := nodeAddress(db.Addr, true, true)
+		if !ok || db.User == "" || !mysqlDBNamePattern.MatchString(db.DBName) {
+			return fmt.Errorf("%s: invalid mysql addr, user or dbName", configPath)
+		}
+		db.Addr = addr
+	}
+	mode := strings.ToLower(strings.TrimSpace(db.TLSMode))
+	switch mode {
+	case "", "true", "false", "skip-verify", "preferred":
+		db.TLSMode = mode
+	default:
+		return fmt.Errorf("%s: unsupported mysql tlsMode %q", configPath, db.TLSMode)
+	}
+	if db.CAFile != "" {
+		if mode != "" && mode != "true" {
+			return fmt.Errorf("%s: mysql caFile conflicts with tlsMode %q", configPath, db.TLSMode)
+		}
+		if !filepath.IsAbs(db.CAFile) {
+			db.CAFile = filepath.Join(filepath.Dir(configPath), db.CAFile)
+		}
+	}
+	return nil
 }
 
 // ValidateEmbedded checks JSON supplied directly by an embedding application.
 func ValidateEmbedded(cfg Config) error {
 	if !validPartyID(cfg.PartyID) || cfg.DataDir == "" || len(cfg.Peers) < 1 || len(cfg.MobilePeers) > 0 || cfg.MPCTLS == nil || cfg.RESTAddr != "" || cfg.MPCAddr != "" || cfg.RESTAuth != nil || cfg.RESTTLS != nil || cfg.AllowNonLoopbackREST {
 		return fmt.Errorf("embedded node requires TLS, outbound peers, dataDir and no listeners or REST auth")
+	}
+	if err := validateDatabaseConfig("<embedded>", &cfg, true); err != nil {
+		return err
 	}
 	seen := map[string]bool{}
 	for id, raw := range cfg.Peers {

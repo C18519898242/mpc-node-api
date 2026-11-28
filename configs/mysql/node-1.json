@@ -1,0 +1,44 @@
+{
+  "partyId": "1",
+  "restAddr": "127.0.0.1:8081",
+  "mpcAddr": "127.0.0.1:9081",
+  "database": {
+    "driver": "mysql",
+    "addr": "127.0.0.1:3306",
+    "user": "root",
+    "passwordEnv": "MPC_NODE_MYSQL_PASSWORD",
+    "dbName": "mpc_node_1",
+    "tlsMode": "preferred"
+  },
+  "peers": {
+    "2": "127.0.0.1:9082",
+    "3": "127.0.0.1:9083"
+  },
+  "mpcTLS": {
+    "caFile": "../../certs/mpc-dev/ca.crt",
+    "certFile": "../../certs/mpc-dev/node-1/node.crt",
+    "keyFile": "../../certs/mpc-dev/node-1/node.key"
+  },
+  "restAuth": {
+    "apiKeys": [
+      {
+        "applicationID": "default",
+        "sha256": "+yps4r9AYwo7/NpQ7Tzo/oKOQHxxVWGYHvOh2nAHZos="
+      },
+      {
+        "applicationID": "wallet-a",
+        "sha256": "Pp303vaGduilmAqdjsgubW0jOrsQlKSwo3642XP6u9Y="
+      }
+    ]
+  },
+  "encryptorMasterPasswordEnv": "MPC_NODE_1_MASTER_PASSWORD",
+  "emergencyRecovery": {
+    "enabled": false,
+    "publicKeys": []
+  },
+  "keyTransfer": {
+    "exportEnabled": false,
+    "wrappingPrivateKeyFile": "../../certs/key-transfer-dev-4096/rsa-private.pem",
+    "exportWrappingKeys": []
+  }
+}

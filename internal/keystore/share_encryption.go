@@ -72,6 +72,9 @@ func presignPurpose(presignatureID string) string {
 
 func (s *SQLite) sealShare(purpose, appID, algorithm, keyID string, data []byte) ([]byte, int, error) {
 	if s.shareCipher == nil {
+		if s.mysql {
+			return nil, 0, errors.New("mysql share storage requires master key encryption")
+		}
 		return data, plaintextShare, nil
 	}
 	sealed, err := s.shareCipher.Seal(purpose, appID, algorithm, keyID, data)
@@ -80,7 +83,7 @@ func (s *SQLite) sealShare(purpose, appID, algorithm, keyID string, data []byte)
 
 func (s *SQLite) openShare(format int, purpose, appID, algorithm, keyID string, data []byte) ([]byte, error) {
 	switch {
-	case format == plaintextShare && s.shareCipher == nil:
+	case format == plaintextShare && s.shareCipher == nil && !s.mysql:
 		return data, nil
 	case format == encryptedShare && s.shareCipher != nil:
 		return s.shareCipher.Open(purpose, appID, algorithm, keyID, data)
@@ -92,6 +95,23 @@ func (s *SQLite) openShare(format int, purpose, appID, algorithm, keyID string, 
 
 // EnableShareEncryption migrates private shares and presignatures before serving requests.
 func (s *SQLite) EnableShareEncryption(ctx context.Context, c *ShareCipher) error {
+	if c == nil {
+		return errors.New("master key cipher is required")
+	}
+	if s.mysql {
+		for _, table := range []string{"key_shares", "reshare_sessions", "ecdsa_presignatures", "frost_presignatures"} {
+			var hasPlaintext bool
+			if err := s.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM "+table+" WHERE share IS NOT NULL AND share_format = ?)", plaintextShare).
+				Scan(&hasPlaintext); err != nil {
+				return fmt.Errorf("check %s encryption: %w", table, err)
+			}
+			if hasPlaintext {
+				return fmt.Errorf("mysql table %s contains unencrypted shares; migrate into a clean encrypted database", table)
+			}
+		}
+		s.shareCipher = c
+		return nil
+	}
 	if _, err := s.db.ExecContext(ctx, "PRAGMA secure_delete = ON"); err != nil {
 		return err
 	}

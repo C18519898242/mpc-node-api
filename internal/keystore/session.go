@@ -13,7 +13,7 @@ const createSessionReservations = `CREATE TABLE IF NOT EXISTS session_reservatio
 // ReserveSession keeps only the used ID, independently of in-memory results.
 // These rows prevent re-executing expired sessions and must not be TTL-deleted.
 func (s *SQLite) ReserveSession(ctx context.Context, app, id string) (bool, error) {
-	r, err := s.db.ExecContext(ctx, `INSERT INTO session_reservations(application_id,session_id) VALUES(?,?) ON CONFLICT DO NOTHING`, app, id)
+	r, err := s.db.ExecContext(ctx, s.insertOrIgnore(`INSERT INTO session_reservations(application_id,session_id) VALUES(?,?)`, "id"), app, id)
 	if err != nil {
 		return false, err
 	}

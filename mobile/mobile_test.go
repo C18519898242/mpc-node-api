@@ -1,8 +1,14 @@
 package mobile
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/C18519898242/mpc-node-api/internal/peertls"
+	"github.com/taurusgroup/multi-party-sig/pkg/party"
 )
 
 func TestChainPathJSON(t *testing.T) {
@@ -28,10 +34,57 @@ func TestChainPathJSON(t *testing.T) {
 }
 
 func TestNewRequiresPrivateStorageAndSecureConfiguration(t *testing.T) {
-	for _, cfg := range []string{`not JSON`, `{}`, `{"partyId":"1","peers":{"2":"127.0.0.1:9182"}}`} {
+	certDir := filepath.Join(t.TempDir(), "certs")
+	if err := peertls.GenerateDevDirectory(certDir, party.IDSlice{"1", "2"}); err != nil {
+		t.Fatal(err)
+	}
+	validMap := map[string]any{
+		"partyId":       "1",
+		"applicationID": "mobile-app",
+		"peers":         map[string]string{"2": "127.0.0.1:9182"},
+		"serverAPIKeys": map[string]string{"2": "server-key-2"},
+		"mpcTLS": map[string]string{
+			"caFile":   filepath.Join(certDir, "ca.crt"),
+			"certFile": filepath.Join(certDir, "node-1", "node.crt"),
+			"keyFile":  filepath.Join(certDir, "node-1", "node.key"),
+		},
+	}
+	validJSON, err := json.Marshal(validMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mysqlMap := make(map[string]any, len(validMap)+1)
+	for k, v := range validMap {
+		mysqlMap[k] = v
+	}
+	mysqlMap["database"] = map[string]any{
+		"driver":      "mysql",
+		"addr":        "127.0.0.1:3306",
+		"user":        "root",
+		"passwordEnv": "DB_PASS",
+		"dbName":      "mpc_node_1",
+	}
+	mysqlJSON, err := json.Marshal(mysqlMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, cfg := range []string{`not JSON`, `{}`, `{"partyId":"1","peers":{"2":"127.0.0.1:9182"}}`, string(mysqlJSON)} {
 		if client, err := New(cfg, t.TempDir(), "password"); err == nil {
 			client.Close()
-			t.Fatal("accepted insecure mobile configuration")
+			t.Fatalf("accepted insecure or mysql mobile configuration: %s", cfg)
 		}
+	}
+
+	dataDir := t.TempDir()
+	client, err := New(string(validJSON), dataDir, "mobile-password")
+	if err != nil {
+		t.Fatalf("valid mobile configuration failed: %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "node.sqlite")); err != nil {
+		t.Fatalf("expected SQLite database for mobile node: %v", err)
 	}
 }

@@ -31,6 +31,9 @@ func (n *node) openLegacyShare(appID, id string, data []byte) ([]byte, error) {
 }
 
 func (n *node) encryptLegacyShares() error {
+	if n.config.DataDir == "" {
+		return nil
+	}
 	if err := n.encryptLegacyShareDir(n.config.DataDir, defaultApplication); err != nil {
 		return err
 	}

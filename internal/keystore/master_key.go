@@ -88,8 +88,8 @@ func (s *SQLite) createMasterKey(ctx context.Context, password string) error {
 	defer clear(key)
 	ciphertext := aead.Seal(nil, nil, key, s.masterKeyAAD())
 	// Every caller reads the persisted winner after a concurrent first start.
-	_, err = s.db.ExecContext(ctx, `INSERT INTO node_master_key (id, format_version, salt, ciphertext)
-		VALUES (1, ?, ?, ?) ON CONFLICT (id) DO NOTHING`, masterKeyVersion, salt, ciphertext)
+	_, err = s.db.ExecContext(ctx, s.insertOrIgnore(`INSERT INTO node_master_key (id, format_version, salt, ciphertext)
+		VALUES (1, ?, ?, ?)`, "id"), masterKeyVersion, salt, ciphertext)
 	return err
 }
 

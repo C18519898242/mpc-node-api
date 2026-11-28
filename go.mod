@@ -3,7 +3,7 @@ module github.com/C18519898242/mpc-node-api
 go 1.25.0
 
 require (
-	filippo.io/edwards25519 v1.0.0-rc.1
+	filippo.io/edwards25519 v1.2.0
 	github.com/C18519898242/mpc-wallet-recovery v0.0.0-20261114073711-2c2216ed1b0e
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.2.0
 	github.com/fxamacker/cbor/v2 v2.4.0
@@ -15,6 +15,7 @@ require (
 require (
 	filippo.io/bigmod v0.1.0 // indirect
 	github.com/cloudflare/circl v1.6.5 // indirect
+	github.com/go-sql-driver/mysql v1.11.0 // indirect
 )
 
 require (

@@ -26,11 +26,17 @@ const (
 	Conflict
 )
 
-type SQLite struct {
-	db          *sql.DB
-	partyID     string
-	shareCipher *ShareCipher
+// Store persists a node's keys, presignatures, reshare state, sessions and master key.
+type Store struct {
+	db                   *sql.DB
+	partyID              string
+	shareCipher          *ShareCipher
+	mysql                bool
+	beforeReshareKeyHook func()
 }
+
+// SQLite is an alias kept for callers that reference the original store type name.
+type SQLite = Store
 
 const DefaultApplication = "default"
 
@@ -186,11 +192,18 @@ func removeCopyColumns(tx *sql.Tx) error {
 	return nil
 }
 
+func (s *Store) insertOrIgnore(prefix, conflictCol string) string {
+	if s.mysql {
+		return prefix + " ON DUPLICATE KEY UPDATE " + conflictCol + " = " + conflictCol
+	}
+	return prefix + " ON CONFLICT DO NOTHING"
+}
+
 // Reserve records the session before keygen. A row with no share represents an
 // attempt that must never restart with the same session ID.
 func (s *SQLite) Reserve(ctx context.Context, applicationID string, key Key) (Reservation, error) {
-	result, err := s.db.ExecContext(ctx, `INSERT INTO key_shares (application_id, algorithm, session_id, key_id, threshold)
-		VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`, applicationID, key.Algorithm, key.SessionID, key.KeyID, key.Threshold)
+	result, err := s.db.ExecContext(ctx, s.insertOrIgnore(`INSERT INTO key_shares (application_id, algorithm, session_id, key_id, threshold)
+		VALUES (?, ?, ?, ?, ?)`, "id"), applicationID, key.Algorithm, key.SessionID, key.KeyID, key.Threshold)
 	if err != nil {
 		return Conflict, err
 	}

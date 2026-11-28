@@ -13,6 +13,7 @@ import (
 
 	"github.com/C18519898242/mpc-node-api/internal/config"
 	"github.com/C18519898242/mpc-node-api/internal/keystore"
+	"github.com/go-sql-driver/mysql"
 )
 
 // ServeHealth runs the health-only HTTP server.
@@ -64,22 +65,31 @@ func Serve(cfg config.Config) error {
 	for _, client := range n.peerClients {
 		defer client.CloseIdleConnections()
 	}
-	keys, err := keystore.OpenNodeSQLite(cfg.DataDir, string(cfg.PartyID))
+	if cfg.Database != nil && cfg.Database.Driver == "mysql" && cfg.EncryptorMasterPasswordEnv == "" {
+		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "master_key")
+		return errors.New("mysql storage requires encryptorMasterPasswordEnv")
+	}
+	keys, err := openNodeStore(cfg)
 	if err != nil {
 		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "storage")
 		return err
 	}
 	defer keys.Close()
 	n.keys = keys
-	if err := n.cleanupLegacyArtifacts(); err != nil {
-		n.logger.Warn("legacy artifact cleanup failed", "node_id", string(cfg.PartyID), "result", "failed")
+	if cfg.DataDir != "" {
+		if err := n.cleanupLegacyArtifacts(); err != nil {
+			n.logger.Warn("legacy artifact cleanup failed", "node_id", string(cfg.PartyID), "result", "failed")
+		}
 	}
 	if err := n.configureRESTAuth(); err != nil {
 		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "rest_auth")
 		return err
 	}
 	masterKey, err := loadMasterKey(keys, cfg.EncryptorMasterPasswordEnv)
-	if err != nil {
+	if err != nil || (cfg.Database != nil && cfg.Database.Driver == "mysql" && len(masterKey) == 0) {
+		if err == nil {
+			err = errors.New("mysql storage requires a master key")
+		}
 		n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "master_key")
 		return err
 	}
@@ -90,9 +100,11 @@ func Serve(cfg config.Config) error {
 			n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "share_encryption")
 			return err
 		}
-		if err := n.encryptLegacyShares(); err != nil {
-			n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "legacy_share_encryption")
-			return err
+		if cfg.DataDir != "" {
+			if err := n.encryptLegacyShares(); err != nil {
+				n.logger.Error("startup failed", "node_id", string(cfg.PartyID), "stage", "legacy_share_encryption")
+				return err
+			}
 		}
 	}
 	rest, err := net.Listen("tcp", n.config.RESTAddr)
@@ -133,7 +145,40 @@ func Serve(cfg config.Config) error {
 	return <-serveErrors
 }
 
-func loadMasterKey(store *keystore.SQLite, passwordEnv string) ([]byte, error) {
+func openNodeStore(cfg config.Config) (*keystore.Store, error) {
+	if cfg.Database == nil || cfg.Database.Driver != "mysql" {
+		return keystore.OpenNodeSQLite(cfg.DataDir, string(cfg.PartyID))
+	}
+	db := cfg.Database
+	dsn := ""
+	if db.DSNEnv != "" {
+		dsn = os.Getenv(db.DSNEnv)
+		if dsn == "" {
+			return nil, errors.New("configured mysql DSN environment variable is empty")
+		}
+	} else {
+		var password string
+		if db.PasswordEnv != "" {
+			password = os.Getenv(db.PasswordEnv)
+			if password == "" {
+				return nil, errors.New("configured mysql password environment variable is empty")
+			}
+		}
+		mysqlCfg := mysql.NewConfig()
+		mysqlCfg.User = db.User
+		mysqlCfg.Passwd = password
+		mysqlCfg.Net = "tcp"
+		mysqlCfg.Addr = db.Addr
+		mysqlCfg.DBName = db.DBName
+		dsn = mysqlCfg.FormatDSN()
+	}
+	return keystore.OpenMySQLWithOptions(dsn, string(cfg.PartyID), keystore.MySQLOptions{
+		TLSMode: db.TLSMode,
+		CAFile:  db.CAFile,
+	})
+}
+
+func loadMasterKey(store *keystore.Store, passwordEnv string) ([]byte, error) {
 	var password string
 	if passwordEnv != "" {
 		password = os.Getenv(passwordEnv)

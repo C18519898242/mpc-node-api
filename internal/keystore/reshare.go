@@ -32,10 +32,10 @@ func createReshareTable(tx *sql.Tx) error {
 }
 
 func (s *SQLite) ReserveReshare(ctx context.Context, applicationID string, op Reshare) (Reservation, ReshareState, error) {
-	result, err := s.db.ExecContext(ctx, `INSERT INTO reshare_sessions (application_id, algorithm, session_id, key_id)
+	result, err := s.db.ExecContext(ctx, s.insertOrIgnore(`INSERT INTO reshare_sessions (application_id, algorithm, session_id, key_id)
 		SELECT application_id, algorithm, ?, key_id FROM key_shares
-		WHERE application_id = ? AND algorithm = ? AND key_id = ? AND share IS NOT NULL
-		ON CONFLICT DO NOTHING`, op.SessionID, applicationID, op.Algorithm, op.KeyID)
+		WHERE application_id = ? AND algorithm = ? AND key_id = ? AND share IS NOT NULL`, "reshare_sessions.key_id"),
+		op.SessionID, applicationID, op.Algorithm, op.KeyID)
 	if err != nil {
 		return Conflict, ReshareState{}, err
 	}
@@ -111,6 +111,9 @@ func (s *SQLite) CommitReshare(ctx context.Context, applicationID string, op Res
 	if err != nil {
 		return err
 	}
+	if s.beforeReshareKeyHook != nil {
+		s.beforeReshareKeyHook()
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE key_shares SET share = ?, share_format = ?
 		WHERE application_id = ? AND algorithm = ? AND key_id = ? AND share IS NOT NULL`,
 		record, format, applicationID, op.Algorithm, op.KeyID)
@@ -126,8 +129,10 @@ func (s *SQLite) CommitReshare(ctx context.Context, applicationID string, op Res
 		applicationID, op.Algorithm, op.KeyID, op.SessionID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE reshare_sessions SET state = 'committed', share = NULL
-		WHERE application_id = ? AND algorithm = ? AND session_id = ? AND key_id = ?`, applicationID, op.Algorithm, op.SessionID, op.KeyID); err != nil {
+	result, err = tx.ExecContext(ctx, `UPDATE reshare_sessions SET state = 'committed', share = NULL
+		WHERE application_id = ? AND algorithm = ? AND session_id = ? AND key_id = ? AND state = 'prepared'`,
+		applicationID, op.Algorithm, op.SessionID, op.KeyID)
+	if err := requireShareUpdate(result, err); err != nil {
 		return err
 	}
 	return tx.Commit()

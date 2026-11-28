@@ -41,6 +41,9 @@ func deriveECDSAShare(share *cmp.Config, path []uint32) (*cmp.Config, error) {
 }
 
 func (n *node) loadKeygenStatus(appID, id string) (keygenStatus, error) {
+	if n.config.DataDir == "" {
+		return keygenStatus{}, errors.New("legacy /v1/keygen requires dataDir")
+	}
 	data, err := os.ReadFile(n.sharePath(appID, id))
 	if errors.Is(err, os.ErrNotExist) {
 		if _, markerErr := os.Stat(n.sharePath(appID, id) + ".started"); markerErr == nil {
@@ -96,6 +99,9 @@ func (n *node) sharePath(appID, id string) string {
 }
 
 func (n *node) recordKeygenAttempt(ctx context.Context, appID, id string) error {
+	if n.config.DataDir == "" {
+		return errors.New("legacy /v1/keygen requires dataDir")
+	}
 	if n.keys != nil {
 		fresh, err := n.keys.ReserveSession(ctx, appID, "legacy-keygen."+id)
 		if err != nil {

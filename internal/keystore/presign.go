@@ -19,9 +19,9 @@ func (s *SQLite) CountPresign(ctx context.Context, applicationID string, keyID s
 	err := s.db.QueryRowContext(ctx, `SELECT
 		(SELECT COUNT(*) FROM ecdsa_presignatures WHERE application_id = ? AND key_id = ?) +
 		(SELECT COUNT(*) FROM frost_presignatures WHERE application_id = ? AND key_id = ?)
-		WHERE EXISTS (
-			SELECT 1 FROM key_shares WHERE application_id = ? AND key_id = ? AND share IS NOT NULL
-		)`, applicationID, keyID, applicationID, keyID, applicationID, keyID).Scan(&count)
+		FROM (
+			SELECT 1 FROM key_shares WHERE application_id = ? AND key_id = ? AND share IS NOT NULL LIMIT 1
+		) AS active_key`, applicationID, keyID, applicationID, keyID, applicationID, keyID).Scan(&count)
 	return count, err
 }
 
@@ -73,10 +73,26 @@ func (s *SQLite) consumePresign(ctx context.Context, applicationID string, algor
 
 	var share Presignature
 	var format int
-	err = tx.QueryRowContext(ctx, fmt.Sprintf(`DELETE FROM %s_presignatures WHERE id = (
-		SELECT id FROM %s_presignatures WHERE application_id = ? AND key_id = ? AND (? = '' OR presignature_id = ?)
-		ORDER BY id LIMIT 1
-	) RETURNING presignature_id, share, share_format`, algorithm, algorithm), applicationID, keyID, presignatureID, presignatureID).Scan(&share.ID, &share.Share, &format)
+	if s.mysql {
+		var rowID int64
+		err = tx.QueryRowContext(ctx, fmt.Sprintf(`SELECT id, presignature_id, share, share_format FROM %s_presignatures
+			WHERE application_id = ? AND key_id = ? AND (? = '' OR presignature_id = ?)
+			ORDER BY id LIMIT 1 FOR UPDATE`, algorithm), applicationID, keyID, presignatureID, presignatureID).
+			Scan(&rowID, &share.ID, &share.Share, &format)
+		if err == nil {
+			var result sql.Result
+			result, err = tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s_presignatures WHERE id = ?", algorithm), rowID)
+			if err == nil {
+				err = requireShareUpdate(result, nil)
+			}
+		}
+	} else {
+		err = tx.QueryRowContext(ctx, fmt.Sprintf(`DELETE FROM %s_presignatures WHERE id = (
+			SELECT id FROM %s_presignatures WHERE application_id = ? AND key_id = ? AND (? = '' OR presignature_id = ?)
+			ORDER BY id LIMIT 1
+		) RETURNING presignature_id, share, share_format`, algorithm, algorithm), applicationID, keyID, presignatureID, presignatureID).
+			Scan(&share.ID, &share.Share, &format)
+	}
 	if err == nil {
 		stored := share.Share
 		share.Share, err = s.openShare(format, presignPurpose(share.ID), applicationID, algorithm, keyID, stored)
@@ -148,8 +164,8 @@ func (s *SQLite) ReserveFROSTPresign(ctx context.Context, applicationID string, 
 }
 
 func (s *SQLite) reservePresign(ctx context.Context, applicationID string, algorithm, sessionID, keyID string, binding [32]byte) (Reservation, []string, error) {
-	result, err := s.db.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s_presign_batches (application_id, session_id, key_id, binding)
-		VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`, algorithm), applicationID, sessionID, keyID, binding[:])
+	result, err := s.db.ExecContext(ctx, s.insertOrIgnore(fmt.Sprintf(`INSERT INTO %s_presign_batches (application_id, session_id, key_id, binding)
+		VALUES (?, ?, ?, ?)`, algorithm), "id"), applicationID, sessionID, keyID, binding[:])
 	if err != nil {
 		return Conflict, nil, err
 	}

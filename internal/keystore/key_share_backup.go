@@ -54,9 +54,9 @@ func (s *SQLite) RestoreKeyShare(ctx context.Context, appID string, backup KeySh
 	if pending {
 		return ErrKeyShareConflict
 	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO key_shares
+	result, err := tx.ExecContext(ctx, s.insertOrIgnore(`INSERT INTO key_shares
 		(application_id, algorithm, session_id, key_id, threshold, share, share_format, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "id"),
 		appID, key.Algorithm, key.SessionID, key.KeyID, key.Threshold, record, format, backup.CreatedAt)
 	if err != nil {
 		return err

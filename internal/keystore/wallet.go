@@ -74,8 +74,8 @@ func (s *SQLite) WalletStatus(ctx context.Context, app, session string, requestD
 }
 
 func (s *SQLite) ReserveWallet(ctx context.Context, app, session, wallet string, requestDigest []byte) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `INSERT INTO wallet_backups (application_id, session_id, wallet_id, backup_request_digest)
-		VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`, app, session, wallet, requestDigest)
+	result, err := s.db.ExecContext(ctx, s.insertOrIgnore(`INSERT INTO wallet_backups (application_id, session_id, wallet_id, backup_request_digest)
+		VALUES (?, ?, ?, ?)`, "id"), app, session, wallet, requestDigest)
 	if err != nil {
 		return false, err
 	}
