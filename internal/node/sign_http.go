@@ -15,13 +15,17 @@ import (
 )
 
 func (n *node) signingPlayers(w http.ResponseWriter, r *http.Request, sessionID string) party.IDSlice {
+	return n.validateSigningPlayers(w, r, sessionID, r.Header.Values("MPC-Players"))
+}
+
+func (n *node) validateSigningPlayers(w http.ResponseWriter, r *http.Request, sessionID string, players []string) party.IDSlice {
 	routingID := mpcRoutingID(sessionID)
 	if r.Header.Get("MPC-RoutingID") != routingID || r.URL.Query().Get("mpc_routing_id") != routingID {
 		http.Error(w, "invalid MPC routing ID", http.StatusBadRequest)
 		return nil
 	}
 	signers := make(party.IDSlice, 0, len(n.config.Peers)+1)
-	for _, player := range r.Header.Values("MPC-Players") {
+	for _, player := range players {
 		id := party.ID(player)
 		peer := n.knownPeer(id)
 		if (id != n.config.PartyID && !peer) || slices.Contains(signers, id) {

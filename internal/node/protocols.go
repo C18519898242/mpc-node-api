@@ -83,6 +83,7 @@ func (n *node) registerProtocols(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("POST /rsa/keys", n.logRequest("keygen", "rsa", n.generateRSAKey))
 	mux.HandleFunc("POST /rsa/keys/importkey", n.logRequest("importkey", "rsa", n.importRSAKey))
+	mux.HandleFunc("GET /rsa/keys/{keyID}/publickey", n.logRequest("publickey", "rsa", n.rsaPublicKey))
 	mux.HandleFunc("POST /rsa/keys/{keyID}/publickey", n.logRequest("publickey", "rsa", n.rsaPublicKey))
 	mux.HandleFunc("POST /rsa/keys/{keyID}/sign", n.logRequest("sign", "rsa", n.signRSA))
 	mux.HandleFunc("POST /rsa/keys/{keyID}/signpss", n.logRequest("signpss", "rsa", n.signRSAPSS))

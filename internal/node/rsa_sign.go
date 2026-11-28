@@ -19,15 +19,27 @@ func (n *node) rsaPublicKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	keyID := r.PathValue("keyID")
-	if err := decodeJSON(w, r, &struct{}{}, 4096); !keyIDPattern.MatchString(keyID) || (err != nil && err != io.EOF) {
+	if !keyIDPattern.MatchString(keyID) {
 		http.Error(w, "invalid RSA public key request", http.StatusBadRequest)
 		return
+	}
+	if r.Method == http.MethodPost {
+		if err := decodeJSON(w, r, &struct{}{}, 4096); err != nil && err != io.EOF {
+			http.Error(w, "invalid RSA public key request", http.StatusBadRequest)
+			return
+		}
 	}
 	data := n.readRSAKey(w, r, keyID)
 	if data == nil {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		_ = json.NewEncoder(w).Encode(struct {
+			PublicKey []byte `json:"publicKey"`
+		}{data.publicDER})
+		return
+	}
 	_ = json.NewEncoder(w).Encode(struct {
 		PublicKey       []byte `json:"publicKey"`
 		Players         uint   `json:"players"`

@@ -10,6 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -50,17 +53,41 @@ func (n *node) signRSAPSS(w http.ResponseWriter, r *http.Request) {
 	keyID := r.PathValue("keyID")
 	sessionID := r.Header.Get("MPC-SessionID")
 	var request struct {
-		Hash        string `json:"hash"`
-		MessageHash []byte `json:"messageHash"`
+		Hash        json.RawMessage `json:"hash"`
+		MessageHash []byte          `json:"messageHash"`
+		Players     []*int          `json:"players"`
 	}
 	if !keyIDPattern.MatchString(keyID) || !memorySessionPattern.MatchString(sessionID) ||
-		decodeJSON(w, r, &request, 4096) != nil || request.Hash != rsaPSSHashSHA256 || len(request.MessageHash) != sha256.Size {
+		decodeJSON(w, r, &request, 4096) != nil || len(request.MessageHash) != sha256.Size {
 		http.Error(w, "invalid RSA-PSS signing request", http.StatusBadRequest)
 		return
 	}
-	signers := n.signingPlayers(w, r, sessionID)
+	zeroBased := string(request.Hash) == strconv.Itoa(int(crypto.SHA256))
+	if !zeroBased {
+		var legacyHash string
+		if json.Unmarshal(request.Hash, &legacyHash) != nil || legacyHash != rsaPSSHashSHA256 || request.Players != nil {
+			http.Error(w, "invalid RSA-PSS signing request", http.StatusBadRequest)
+			return
+		}
+	}
+	signers := n.validateSigningPlayers(w, r, sessionID, n.rsaPSSPlayerIDs(r.Header.Values("MPC-Players"), zeroBased))
 	if signers == nil {
 		return
+	}
+	if request.Players != nil {
+		bodyPlayers := make(party.IDSlice, 0, len(request.Players))
+		for _, index := range request.Players {
+			if index == nil || *index < 0 {
+				http.Error(w, "invalid RSA-PSS request players", http.StatusBadRequest)
+				return
+			}
+			bodyPlayers = append(bodyPlayers, party.ID(strconv.FormatUint(uint64(*index)+1, 10)))
+		}
+		slices.Sort(bodyPlayers)
+		if !slices.Equal(bodyPlayers, signers) {
+			http.Error(w, "RSA-PSS request players do not match MPC-Players", http.StatusBadRequest)
+			return
+		}
 	}
 	for _, player := range signers {
 		if player != n.config.PartyID && n.config.Peers[player] == "" {
@@ -94,10 +121,10 @@ func (n *node) signRSAPSS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := rsaPSSSignPrefix + sessionID
-	bindingMessage := append([]byte(request.Hash+"\x00"), request.MessageHash...)
+	bindingMessage := append([]byte(rsaPSSHashSHA256+"\x00"), request.MessageHash...)
 	n.serveSignature(w, r, id, keyID, signers, nil, bindingMessage, "RSA-PSS", "partial",
 		func(ctx context.Context, session *keygenSession, _ bool) ([]byte, error) {
-			salt, err := n.exchangeRSAPSSSalt(ctx, id, session, sessionID, keyID, request.Hash, request.MessageHash, signers, data.publicDER)
+			salt, err := n.exchangeRSAPSSSalt(ctx, id, session, sessionID, keyID, rsaPSSHashSHA256, request.MessageHash, signers, data.publicDER)
 			if err != nil {
 				return nil, err
 			}
@@ -122,7 +149,7 @@ func (n *node) signRSAPSS(w http.ResponseWriter, r *http.Request) {
 				Format:       rsaPSSFormat,
 				SessionID:    sessionID,
 				KeyID:        keyID,
-				HashFunction: request.Hash,
+				HashFunction: rsaPSSHashSHA256,
 				PublicKey:    data.publicDER,
 				Players:      data.share.Players,
 				Threshold:    data.share.Threshold,
@@ -140,6 +167,29 @@ func (n *node) signRSAPSS(w http.ResponseWriter, r *http.Request) {
 				PartialSignature []byte `json:"partialSignature"`
 			}{envelope})
 		})
+}
+
+func (n *node) rsaPSSPlayerIDs(headers []string, zeroBased bool) []string {
+	var ids []string
+	for _, header := range headers {
+		// A legacy header may be a literal configured ID containing a comma.
+		if !zeroBased && (party.ID(header) == n.config.PartyID || n.knownPeer(party.ID(header))) {
+			ids = append(ids, header)
+			continue
+		}
+		for player := range strings.SplitSeq(header, ",") {
+			player = strings.TrimSpace(player)
+			if zeroBased {
+				index, err := strconv.ParseUint(player, 10, 63)
+				if err != nil {
+					return nil
+				}
+				player = strconv.FormatUint(index+1, 10)
+			}
+			ids = append(ids, player)
+		}
+	}
+	return ids
 }
 
 func (n *node) exchangeRSAPSSSalt(ctx context.Context, route string, session *keygenSession, sessionID, keyID, hashName string, digest []byte, signers party.IDSlice, publicDER []byte) ([]byte, error) {

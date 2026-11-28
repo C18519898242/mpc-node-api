@@ -37,6 +37,11 @@ func TestRSAOperationsRequireProtectedNodes(t *testing.T) {
 			t.Errorf("unprotected RSA %s returned HTTP %d", operation, w.Code)
 		}
 	}
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/rsa/keys/test-rsa/publickey", nil))
+	if w.Code != http.StatusForbidden {
+		t.Errorf("unprotected GET RSA public key returned HTTP %d", w.Code)
+	}
 }
 
 func rsaTestNodes(t *testing.T, auth *config.RESTAuthConfig) (party.IDSlice, [3]*node) {

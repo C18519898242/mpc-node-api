@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,9 +39,9 @@ func TestRSAPSSSigning(t *testing.T) {
 		rest[i] = httptest.NewTLSServer(n.restHandler())
 		t.Cleanup(rest[i].Close)
 	}
-	doREST := func(nodeIdx int, token, path string, body []byte, session string, selected []party.ID) (int, http.Header, []byte) {
+	doRESTWithMethod := func(method string, nodeIdx int, token, path string, body []byte, session string, selected []party.ID) (int, http.Header, []byte) {
 		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, rest[nodeIdx].URL+path, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(t.Context(), method, rest[nodeIdx].URL+path, bytes.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -64,6 +66,9 @@ func TestRSAPSSSigning(t *testing.T) {
 			t.Fatal(err)
 		}
 		return res.StatusCode, res.Header, data
+	}
+	doREST := func(nodeIdx int, token, path string, body []byte, session string, selected []party.ID) (int, http.Header, []byte) {
+		return doRESTWithMethod(http.MethodPost, nodeIdx, token, path, body, session, selected)
 	}
 
 	const keygenSession, keyID = "rsa-pss-keygen", "pss-key"
@@ -101,15 +106,35 @@ func TestRSAPSSSigning(t *testing.T) {
 	}
 	pubKey := parsed.(*rsa.PublicKey)
 
+	t.Run("GET public key", func(t *testing.T) {
+		code, _, data := doRESTWithMethod(http.MethodGet, 0, rsaOtherToken, "/rsa/keys/"+keyID+"/publickey", nil, "", nil)
+		var response map[string][]byte
+		if code != http.StatusOK || json.Unmarshal(data, &response) != nil || len(response) != 1 ||
+			!bytes.Equal(response["publicKey"], pubResp.PublicKey) {
+			t.Fatalf("GET public key returned HTTP %d with unexpected response", code)
+		}
+	})
+
 	digest := sha256.Sum256([]byte("threshold RSA-PSS message"))
-	signOnce := func(session string, selected []int, hash string, msgDigest []byte) ([]byte, [][]byte) {
+	signOnce := func(session string, selected []int, hash any, msgDigest []byte) ([]byte, [][]byte) {
 		t.Helper()
 		routingID := mpcRoutingID(session)
 		selectedIDs := make([]party.ID, len(selected))
 		for i, idx := range selected {
 			selectedIDs[i] = players[idx]
 		}
-		reqBody, _ := json.Marshal(map[string]any{"hash": hash, "messageHash": msgDigest})
+		input := map[string]any{"hash": hash, "messageHash": msgDigest}
+		if _, legacy := hash.(string); !legacy {
+			input["players"] = selected
+			var indices []string
+			for _, idx := range selected {
+				indices = append(indices, strconv.Itoa(idx))
+			}
+			selectedIDs = []party.ID{party.ID(strings.Join(indices, ", "))}
+		} else {
+			selectedIDs = []party.ID{selectedIDs[0] + ", " + selectedIDs[1]}
+		}
+		reqBody, _ := json.Marshal(input)
 		type res struct {
 			idx    int
 			code   int
@@ -172,9 +197,19 @@ func TestRSAPSSSigning(t *testing.T) {
 
 	// Two sessions for the same digest using nodes 1 and 3 must produce distinct valid signatures.
 	sig1, _ := signOnce("pss-sess-1", []int{0, 2}, "SHA256", digest[:])
-	sig2, _ := signOnce("pss-sess-2", []int{0, 2}, "SHA256", digest[:])
+	sig2, _ := signOnce("pss-sess-2", []int{0, 2}, 5, digest[:])
 	if bytes.Equal(sig1, sig2) {
 		t.Fatal("two RSA-PSS sessions produced identical signatures")
+	}
+
+	for i, bodyPlayers := range []string{"[0,1]", "[]", "[0,0]", "[-1]", "[null]"} {
+		body, _ := json.Marshal(map[string]any{"hash": 5, "messageHash": digest[:], "players": json.RawMessage(bodyPlayers)})
+		session := "pss-invalid-players-" + strconv.Itoa(i)
+		code, _, _ := doREST(0, rsaOtherToken, "/rsa/keys/"+keyID+"/signpss?mpc_routing_id="+mpcRoutingID(session),
+			body, session, []party.ID{"0", "2"})
+		if code != http.StatusBadRequest {
+			t.Fatalf("invalid players %s returned HTTP %d, want 400", bodyPlayers, code)
+		}
 	}
 
 	// Replaying the same session with changed parameters must return 409 Conflict.
